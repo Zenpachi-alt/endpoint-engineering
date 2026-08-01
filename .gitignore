@@ -1,0 +1,73 @@
+# --- Never commit tenant data -------------------------------------------------
+# Exports and captures routinely contain serials, UPNs, and object IDs.
+*AutopilotHWID*.csv
+*HardwareHash*.csv
+*-Export.csv
+*-Export.json
+Sandbox/
+
+# --- Secrets ------------------------------------------------------------------
+.env
+*.env
+secrets.json
+*.secret
+*.pfx
+*.p12
+*.key
+*.pem
+*.publishsettings
+
+# --- Local settings -----------------------------------------------------------
+*.local.json
+*.local.ps1
+settings.local.json
+.claude/settings.local.json
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# --- Logs and transcripts -----------------------------------------------------
+*.log
+Logs/
+Transcript-*.txt
+*.etl
+
+# --- PowerShell / build output ------------------------------------------------
+*.nupkg
+Output/
+Artifacts/
+TestResults.xml
+Pester-*.xml
+coverage.xml
+PSScriptAnalyzerResults.*
+
+# --- Intune packaging ---------------------------------------------------------
+# Built packages are outputs; commit the source files instead.
+*.intunewin
+IntuneWinAppUtil*/
+
+# --- Windows / Explorer -------------------------------------------------------
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+*.stackdump
+
+# --- Office and OneDrive temp / conflict files --------------------------------
+~$*
+.~lock.*
+*.tmp
+*.temp
+*~
+*.laccdb
+*-Conflict.*
+*(conflicted copy)*
+* - Copy.*
+*.crdownload
+*.partial
+
+# --- macOS (for future macOS content) -----------------------------------------
+.DS_Store
+.AppleDouble
+._*
