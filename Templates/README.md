@@ -35,6 +35,7 @@ on a workstation.
 
 ## Before committing a script built from a template
 
+- The SPDX header is the first thing in the file, above `#Requires`.
 - Comment-based help is filled in, including `.NOTES` with Graph scopes, admin
   consent, licensing, and modules.
 - No real tenant identifiers anywhere — including examples, comments, and sample

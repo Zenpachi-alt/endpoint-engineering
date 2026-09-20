@@ -12,10 +12,13 @@ outside my organisation.
   Use obvious placeholders: `<TenantId>`, `<GroupId>`, `user@contoso.com`,
   `00000000-0000-0000-0000-000000000000`.
 - **Organise by domain and platform, never by file type.** A script, its payload,
-  its detection counterpart, and its README are one unit in one folder. Delivered
-  through Intune → `Intune/<Platform>/`. Authenticates to Graph → `Graph/`. Runs
-  by itself on a device or a workstation → `Standalone/`. Acts on this
-  repository → `Tools/`.
+  its detection counterpart, and its README are one unit in one folder. Route by
+  what a script acts on and where it runs, not by which API it calls — nearly
+  everything admin-side uses Graph, so "uses Graph" sorts nothing. Runs on a
+  managed device or is deployed to one → `Intune/<Platform>/`. Run by a person
+  from a workstation against the tenant → `Graph/`. Runs by itself, touching
+  neither Intune nor a tenant → `Standalone/`. Acts on this repository →
+  `Tools/`.
 - **`Standalone/` is not a junk drawer.** A script goes there because it is
   genuinely self-contained, not because deciding was hard. Anything that would
   be delivered through Intune or would talk to Graph belongs in the folder that
@@ -30,6 +33,21 @@ outside my organisation.
   rule and skips exactly those folders.
 - **Every script documents its prerequisites and required permissions** — modules,
   licensing, API permissions, and the role needed to run it.
+- **Every script opens with the SPDX header**, before `#Requires` (below the
+  shebang in a shell script):
+
+  ```
+  # SPDX-FileCopyrightText: 2026 Tomasz Pietryka
+  # SPDX-License-Identifier: MIT
+  # Source: https://github.com/Zenpachi-alt/endpoint-engineering
+  ```
+
+  Single files get copied out of repositories and lose their context. The
+  licence identifier alone names a licence with no holder, MIT asks that the
+  copyright notice travel with copies, and the source line is how a stray copy
+  leads back to the full licence and to a version that may have been fixed
+  since. The URL points at the repository root, not a file, so it survives
+  files being moved or renamed.
 - **Error handling is mandatory.** No silent failures. Every failure surfaces an
   actionable message, and scripts that can fail exit non-zero.
 - Folders are PascalCase. Scripts are `Verb-Noun.ps1`. Supporting files take the

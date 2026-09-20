@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Tomasz Pietryka
+# SPDX-License-Identifier: MIT
+# Source: https://github.com/Zenpachi-alt/endpoint-engineering
+
 # Declare the lowest version this script actually needs. Admin-side tooling is
 # not limited to Windows PowerShell - raise this to 7.0 when the script uses
 # PowerShell 7 syntax, and CI will stop holding it to 5.1.

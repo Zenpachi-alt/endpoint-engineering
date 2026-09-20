@@ -4,6 +4,10 @@
 *HardwareHash*.csv
 *-Export.csv
 *-Export.json
+# Report output written by scripts in this repo - real device and user data.
+*Inventory-*.csv
+*Inventory-*.json
+Reports/
 Sandbox/
 
 # --- Secrets ------------------------------------------------------------------

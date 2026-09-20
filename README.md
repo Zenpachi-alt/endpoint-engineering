@@ -17,9 +17,10 @@ with the payload, detection logic, and documentation that belong to it.
 | `Templates/` | Starting points for new scripts and artifacts. |
 | `Templates/Remediation/` | Detection and remediation script pair for Intune remediation packages. |
 | `Tools/` | Repository maintenance: the identifier and secret scanner, and the git hook that runs it. |
-| `Intune/Windows/` | Remediations, platform scripts, configuration profiles, applications, compliance policies. |
+| `Intune/Windows/` | Artifacts that run on a device or are deployed to one: remediations, platform scripts, configuration profiles, applications, compliance policies. |
 | `Intune/Windows/Autopilot/` | Hardware hash handling, deployment profiles, Enrollment Status Page configuration. |
-| `Graph/` | Microsoft Graph tooling not tied to a single Intune feature — authentication patterns, tenant reporting, bulk operations. |
+| `Graph/` | Admin-side tooling run from a workstation against a tenant through Microsoft Graph, whatever workload it touches. |
+| `Graph/Devices/` | Managed device reporting and inventory. |
 | `Standalone/` | Scripts that run on their own: local device work, diagnostics, log collection, one-off utilities. No Intune delivery, no Graph. |
 
 Folders are created by the first file that belongs in them, so not every path
@@ -27,11 +28,15 @@ above exists yet.
 
 ### Where a new script goes
 
+The deciding question is what a script acts on and where it runs — not which
+API it happens to call. Nearly everything admin-side uses Graph, so "uses Graph"
+would sort almost the whole repo into one folder.
+
 | If it... | It belongs in |
 | --- | --- |
-| is delivered, enforced, or reported on through Intune | `Intune/<Platform>/` |
-| authenticates to Microsoft Graph | `Graph/` |
-| runs by itself on a device or a workstation | `Standalone/` |
+| runs on a managed device, or is deployed to one by Intune | `Intune/<Platform>/` |
+| is run by you, from a workstation, against the tenant | `Graph/` |
+| runs by itself, touching neither Intune nor a tenant | `Standalone/` |
 | acts on this repository rather than a tenant or a device | `Tools/` |
 | is a starting point rather than a finished thing | `Templates/` |
 
@@ -41,7 +46,7 @@ If a script fits none of these, that is worth a pause rather than a new folder.
 
 | Area | Script | Purpose |
 | --- | --- | --- |
-| — | _Nothing published yet._ | — |
+| Graph / Devices | [`Get-ManagedDeviceInventory.ps1`](Graph/Devices/Get-ManagedDeviceInventory.ps1) | Every Intune managed device in the tenant, filterable, with optional CSV export. |
 
 ## Working in this repo
 
