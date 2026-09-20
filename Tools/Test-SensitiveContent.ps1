@@ -465,7 +465,7 @@ try {
     $excludes = $DefaultExcludePath + $ExcludePath
     $targets = Get-TargetFile -RepositoryRoot $repositoryRoot -SearchPath $Path -FromIndex:$Staged
 
-    Write-Verbose "Files to consider: $($targets.Count)"
+    Write-Verbose "Files to consider: $(@($targets).Count)"
 
     $findings = New-Object System.Collections.Generic.List[psobject]
     $scanned = 0
@@ -497,7 +497,7 @@ try {
         }
 
         $lines = Get-FileLine -RepositoryRoot $repositoryRoot -RelativePath $relativePath -FromIndex:$Staged
-        if ($lines.Count -eq 0) { continue }
+        if (@($lines).Count -eq 0) { continue }
 
         $scanned++
         $lineNumber = 0
