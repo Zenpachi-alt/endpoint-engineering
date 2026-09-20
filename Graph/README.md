@@ -7,6 +7,7 @@ a device, or that run on one, belong under `Intune/` instead.
 
 | Folder | Contains |
 | --- | --- |
+| `Configuration/` | Backup and reporting over Intune configuration objects: remediations, scripts, profiles, compliance policies. |
 | `Devices/` | Managed device reporting and inventory. |
 
 ## Conventions for everything in this folder
