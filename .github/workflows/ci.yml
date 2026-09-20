@@ -1,0 +1,148 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyse:
+    name: Analyse and scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Cache PowerShell modules
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/powershell/Modules
+          key: psmodules-${{ runner.os }}-psscriptanalyzer
+
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          if (-not (Get-Module -ListAvailable -Name PSScriptAnalyzer)) {
+            Install-Module -Name PSScriptAnalyzer -Scope CurrentUser -Force -ErrorAction Stop
+          }
+          (Get-Module -ListAvailable -Name PSScriptAnalyzer | Select-Object -First 1).Version.ToString()
+
+      - name: Run PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          $results = Invoke-ScriptAnalyzer -Path . -Recurse -Settings ./PSScriptAnalyzerSettings.psd1 -ErrorAction Stop
+          if ($results) {
+            $results |
+              Sort-Object -Property Severity, ScriptName, Line |
+              Format-Table -AutoSize -Property Severity, RuleName, ScriptName, Line, Message |
+              Out-String -Width 200 |
+              Write-Output
+            throw "PSScriptAnalyzer reported $($results.Count) issue(s)."
+          }
+          Write-Output 'PSScriptAnalyzer: clean.'
+
+      - name: Check 5.1 compatibility of scripts that declare it
+        shell: pwsh
+        run: |
+          # A script is held to Windows PowerShell 5.1 only while it says it
+          # targets 5.1. Admin-side tooling targets PowerShell 7 and is exempt.
+          $targets = Get-ChildItem -Path . -Filter *.ps1 -Recurse -File |
+            Where-Object {
+              (Get-Content -LiteralPath $_.FullName -TotalCount 20) -match '^\s*#Requires\s+-Version\s+5\.1\s*$'
+            }
+
+          if (-not $targets) {
+            Write-Output 'No scripts declare #Requires -Version 5.1.'
+            exit 0
+          }
+
+          $results = foreach ($target in $targets) {
+            Invoke-ScriptAnalyzer -Path $target.FullName -Settings ./PSScriptAnalyzerSettings.WindowsPowerShell.psd1 -ErrorAction Stop
+          }
+
+          if ($results) {
+            $results |
+              Format-Table -AutoSize -Property Severity, RuleName, ScriptName, Line, Message |
+              Out-String -Width 200 |
+              Write-Output
+            throw "$(@($results).Count) Windows PowerShell 5.1 compatibility issue(s)."
+          }
+
+          Write-Output "$(@($targets).Count) script(s) declare 5.1 and are compatible with it."
+
+      - name: Scan for tenant identifiers and secrets
+        shell: pwsh
+        run: |
+          # Values stay masked: this log is public once the repository is.
+          $findings = & ./Tools/Test-SensitiveContent.ps1
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            $findings |
+              Format-Table -AutoSize -Property Severity, Rule, File, Line, Match, Advice |
+              Out-String -Width 200 |
+              Write-Output
+            throw "Sensitive content scan exited with code $code."
+          }
+          Write-Output 'Sensitive content scan: clean.'
+
+      - name: Check every folder has a README
+        shell: pwsh
+        run: |
+          $missing = Get-ChildItem -Path . -Directory -Recurse -Force |
+            Where-Object { $_.FullName -notmatch '[\\/](\.git|\.github|\.claude|\.vscode)([\\/]|$)' } |
+            Where-Object { -not (Test-Path -LiteralPath (Join-Path $_.FullName 'README.md')) } |
+            ForEach-Object { Resolve-Path -LiteralPath $_.FullName -Relative }
+
+          if ($missing) {
+            $missing | Write-Output
+            throw "$(@($missing).Count) folder(s) have no README.md. See CLAUDE.md."
+          }
+          Write-Output 'Folder READMEs: complete.'
+
+  parse-windows-powershell:
+    name: Parse endpoint-side scripts under Windows PowerShell 5.1
+    runs-on: windows-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Parse scripts that declare 5.1 with the 5.1 parser
+        shell: powershell
+        run: |
+          # Windows PowerShell is the only host present on a managed device, so
+          # anything that declares it must parse here. PowerShell 7 tooling is
+          # parsed by the PSScriptAnalyzer job instead.
+          # A List is used rather than a counter: ForEach-Object runs in a child
+          # scope, so an incremented int would never reach this scope.
+          $failures = New-Object System.Collections.Generic.List[string]
+
+          Get-ChildItem -Path . -Filter *.ps1 -Recurse -File | ForEach-Object {
+            $file = $_
+
+            if (-not ((Get-Content -LiteralPath $file.FullName -TotalCount 20) -match '^\s*#Requires\s+-Version\s+5\.1\s*$')) {
+              return
+            }
+
+            $parseErrors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$null, [ref]$parseErrors)
+
+            foreach ($parseError in $parseErrors) {
+              $failures.Add("$($file.FullName)($($parseError.Extent.StartLineNumber)): $($parseError.Message)")
+            }
+          }
+
+          if ($failures.Count -gt 0) {
+            $failures | Write-Output
+            Write-Output "$($failures.Count) parse error(s) under Windows PowerShell 5.1."
+            exit 1
+          }
+
+          Write-Output 'Every script that declares Windows PowerShell 5.1 parses under it.'

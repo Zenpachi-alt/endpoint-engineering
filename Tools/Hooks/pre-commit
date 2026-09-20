@@ -1,0 +1,39 @@
+#!/bin/sh
+#
+# Blocks a commit that contains tenant identifiers or credential material.
+# Installed by running Tools/Install-GitHook.ps1, which points core.hooksPath
+# at this folder. Bypass deliberately with: git commit --no-verify
+#
+
+set -u
+
+repo_root=$(git rev-parse --show-toplevel) || exit 1
+scanner="$repo_root/Tools/Test-SensitiveContent.ps1"
+
+if [ ! -f "$scanner" ]; then
+    echo "pre-commit: $scanner not found; skipping the sensitive content scan." >&2
+    exit 0
+fi
+
+if command -v pwsh >/dev/null 2>&1; then
+    shell_exe=pwsh
+elif command -v powershell >/dev/null 2>&1; then
+    shell_exe=powershell
+else
+    echo "pre-commit: no PowerShell on PATH; cannot run the sensitive content scan." >&2
+    echo "pre-commit: install PowerShell, or commit with --no-verify if you have checked the content yourself." >&2
+    exit 1
+fi
+
+"$shell_exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$scanner" -Staged
+status=$?
+
+if [ $status -ne 0 ]; then
+    echo "" >&2
+    echo "pre-commit: commit blocked. Matched values are masked above." >&2
+    echo "pre-commit: review with: $shell_exe -NoProfile -File Tools/Test-SensitiveContent.ps1 -Staged -ShowMatch" >&2
+    echo "pre-commit: if the finding is a false positive, add # sensitive-content:allow to the line or pass -AllowPattern." >&2
+    exit 1
+fi
+
+exit 0
