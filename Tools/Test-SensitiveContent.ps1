@@ -369,7 +369,7 @@ function Get-TargetFile {
     foreach ($root in $roots) {
         $resolved = Resolve-Path -LiteralPath $root -ErrorAction Stop
 
-        foreach ($item in @(Get-Item -LiteralPath $resolved.Path -ErrorAction Stop)) {
+        foreach ($item in @(Get-Item -LiteralPath $resolved.Path -Force -ErrorAction Stop)) {
             if ($item.PSIsContainer) {
                 Get-ChildItem -LiteralPath $item.FullName -Recurse -File -Force -ErrorAction Stop |
                     ForEach-Object { $files.Add($_.FullName) }
@@ -419,6 +419,9 @@ function Get-FileLine {
         return @($content)
     }
 
+    # -Force throughout: on Linux and macOS, PowerShell treats a leading dot as
+    # hidden, so .gitattributes and .editorconfig are unreadable without it.
+
     $full = if ([System.IO.Path]::IsPathRooted($RelativePath)) {
         $RelativePath
     }
@@ -428,7 +431,7 @@ function Get-FileLine {
 
     if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { return @() }
 
-    return @(Get-Content -LiteralPath $full -ErrorAction Stop)
+    return @(Get-Content -LiteralPath $full -Force -ErrorAction Stop)
 }
 
 function Format-MaskedValue {
@@ -482,7 +485,7 @@ try {
         }
 
         if ((-not $Staged) -and (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
-            $size = (Get-Item -LiteralPath $fullPath -ErrorAction Stop).Length
+            $size = (Get-Item -LiteralPath $fullPath -Force -ErrorAction Stop).Length
             if ($size -gt $MaximumFileSizeBytes) {
                 Write-Warning "Skipped '$normalised': $size bytes exceeds the $MaximumFileSizeBytes byte limit."
                 continue

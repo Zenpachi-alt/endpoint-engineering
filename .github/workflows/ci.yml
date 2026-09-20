@@ -19,13 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out
-        uses: actions/checkout@v4
-
-      - name: Cache PowerShell modules
-        uses: actions/cache@v4
-        with:
-          path: ~/.local/share/powershell/Modules
-          key: psmodules-${{ runner.os }}-psscriptanalyzer
+        uses: actions/checkout@v7
 
       - name: Install PSScriptAnalyzer
         shell: pwsh
@@ -112,7 +106,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Parse scripts that declare 5.1 with the 5.1 parser
         shell: powershell
