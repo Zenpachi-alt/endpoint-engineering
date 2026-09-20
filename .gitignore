@@ -67,7 +67,7 @@ $RECYCLE.BIN/
 *.crdownload
 *.partial
 
-# --- macOS (for future macOS content) -----------------------------------------
+# --- macOS (metadata that arrives with files from Mac users) ------------------
 .DS_Store
 .AppleDouble
 ._*

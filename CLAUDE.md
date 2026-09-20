@@ -12,10 +12,22 @@ outside my organisation.
   Use obvious placeholders: `<TenantId>`, `<GroupId>`, `user@contoso.com`,
   `00000000-0000-0000-0000-000000000000`.
 - **Organise by domain and platform, never by file type.** A script, its payload,
-  its detection counterpart, and its README are one unit in one folder.
+  its detection counterpart, and its README are one unit in one folder. Delivered
+  through Intune → `Intune/<Platform>/`. Authenticates to Graph → `Graph/`. Runs
+  by itself on a device or a workstation → `Standalone/`. Acts on this
+  repository → `Tools/`.
+- **`Standalone/` is not a junk drawer.** A script goes there because it is
+  genuinely self-contained, not because deciding was hard. Anything that would
+  be delivered through Intune or would talk to Graph belongs in the folder that
+  says so. Once `Standalone/` holds work that clusters around a subject, split
+  that cluster into its own folder rather than letting the pile grow.
 - **No empty folders.** A folder is created by the first real file that belongs
   in it.
 - **Every folder has a `README.md`** stating what it contains and how it is used.
+  Tool configuration folders are exempt: `.github/`, because GitHub treats
+  `.github/README.md` as a repository README (the workflows are documented in
+  the root `README.md` instead), plus `.claude/` and `.vscode/`. CI enforces the
+  rule and skips exactly those folders.
 - **Every script documents its prerequisites and required permissions** — modules,
   licensing, API permissions, and the role needed to run it.
 - **Error handling is mandatory.** No silent failures. Every failure surfaces an
@@ -41,11 +53,65 @@ outside my organisation.
 - Request the narrowest Graph scopes that work, and verify the granted scopes
   after connecting rather than assuming consent succeeded.
 - Comment-based help is required and must declare, under `.NOTES`:
+  - `PowerShell` — the version the script targets, matching its `#Requires` line
   - `Graph scopes` — every scope the script requests
   - `Admin consent` — required or not
   - `Licensing` — e.g. Microsoft Intune Plan 1, Microsoft Entra ID P1/P2
   - `Modules` — every module the script depends on
-- Start from `Templates/Script-Template.ps1`.
 
-<!-- Sections for other languages (batch, Bash/zsh) are added when the first
-     file in that language lands. Do not add them pre-emptively. -->
+## Admin-side and endpoint-side scripts
+
+The two run in different worlds and are written to different rules. Start from
+the matching template; `Templates/README.md` compares them.
+
+**Admin-side** — run by a person against a tenant: Graph queries, bulk
+operations, reporting. Start from `Templates/Script-Template.ps1`. **PowerShell
+7 is fine and often better** — use it where 5.1 is limiting, and say so.
+Authenticates, verifies granted scopes, and defaults to report-only or
+`-WhatIf` for anything that writes at scale. Irreversible actions (wipe, retire,
+delete, Autopilot deregistration) are called out in the help.
+
+**Endpoint-side** — run by the Intune management extension on a managed device.
+Start from `Templates/Remediation/`. **Windows PowerShell 5.1 only**, because
+that is what ships with Windows; PowerShell 7 has to be deployed separately and
+cannot be assumed on a device. No module dependencies, SYSTEM context unless
+stated otherwise, logging to a file under
+`%ProgramData%\EndpointEngineering\Logs`, and meaningful exit codes. Detection
+scripts must exit `1` and only `1` for "issue found"; any other non-zero code
+must mean "the detection failed", so a broken script never triggers a
+remediation fleet-wide. Remediation scripts verify the change before reporting
+success.
+
+**Declare the version honestly.** `#Requires -Version` is the contract, and CI
+reads it: a script that declares `5.1` is checked for Windows PowerShell
+compatibility and parsed by the 5.1 parser; everything else is analysed against
+PowerShell 7 and may use 7-only syntax. Raise the declaration to `7.0` when a
+script genuinely needs it rather than writing 5.1-compatible code out of habit.
+
+## Encoding and line endings
+
+- `.gitattributes` normalises line endings; do not fight it in an editor.
+- `.editorconfig` sets 4-space indentation and a 100-column guide.
+- Scripts are UTF-8 and **ASCII-only in content**. Intune rejects a BOM when
+  script signature enforcement is on, and Windows PowerShell 5.1 misreads
+  non-ASCII characters in a UTF-8 file without a BOM. Staying ASCII removes the
+  problem: no smart quotes, no dashes, no accented characters in scripts.
+
+## Before committing
+
+1. `Tools/Install-GitHook.ps1` once per clone — the pre-commit hook runs the
+   identifier and secret scan against staged content.
+2. `Tools/Test-SensitiveContent.ps1` to check the working tree by hand. Findings
+   are masked by default; `-ShowMatch` shows the values locally.
+3. `Invoke-ScriptAnalyzer -Path . -Recurse -Settings .\PSScriptAnalyzerSettings.psd1`
+   — CI fails on ParseError, Error and Warning.
+
+CI (`.github/workflows/ci.yml`) repeats all three on every push and pull
+request, and additionally checks every script that declares
+`#Requires -Version 5.1` against Windows PowerShell, both with
+`PSScriptAnalyzerSettings.WindowsPowerShell.psd1` and with the 5.1 parser on a
+Windows runner. The hook is a convenience; CI is the gate.
+
+The scanner matches shapes, not meaning. Design-level identifiers that survive
+scrubbing — distinctive policy, app, group or script names, naming conventions,
+custom OMA-URIs — still need a human read before anything is published.

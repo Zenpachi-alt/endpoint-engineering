@@ -1,3 +1,6 @@
+# Declare the lowest version this script actually needs. Admin-side tooling is
+# not limited to Windows PowerShell - raise this to 7.0 when the script uses
+# PowerShell 7 syntax, and CI will stop holding it to 5.1.
 #Requires -Version 5.1
 #Requires -Modules Microsoft.Graph.Authentication
 
@@ -34,6 +37,7 @@
     Version       : 1.0.0
     Last updated  : YYYY-MM-DD
 
+    PowerShell    : 5.1 or 7. Keep this line and the #Requires line in step.
     Graph scopes  : DeviceManagementManagedDevices.ReadWrite.All
                     Group.Read.All
     Admin consent : Required
@@ -92,7 +96,7 @@ try {
         Write-Verbose "Reusing existing Microsoft Graph session for tenant '$TenantId'."
     }
 
-    # Consent can succeed partially — verify rather than assume.
+    # Consent can succeed partially - verify rather than assume.
     $missingScopes = $RequiredScopes | Where-Object { $_ -notin $context.Scopes }
     if ($missingScopes) {
         throw "The Graph session is missing required scope(s): $($missingScopes -join ', '). Reconnect and grant admin consent."
@@ -112,9 +116,10 @@ try {
     #endregion
 
     #region Report
-    # $reportFile = Join-Path -Path $OutputPath -ChildPath "Verb-Noun-$(Get-Date -Format 'yyyyMMdd-HHmmss').csv"
+    $reportFile = Join-Path -Path $OutputPath -ChildPath "Verb-Noun-$(Get-Date -Format 'yyyyMMdd-HHmmss').csv"
+    Write-Verbose ('Report path: {0}' -f $reportFile)
+
     # $results | Export-Csv -Path $reportFile -NoTypeInformation -Encoding UTF8 -ErrorAction Stop
-    # Write-Verbose "Report written to '$reportFile'."
     #endregion
 }
 catch {

@@ -15,13 +15,27 @@ with the payload, detection logic, and documentation that belong to it.
 | Path | Contains |
 | --- | --- |
 | `Templates/` | Starting points for new scripts and artifacts. |
+| `Templates/Remediation/` | Detection and remediation script pair for Intune remediation packages. |
+| `Tools/` | Repository maintenance: the identifier and secret scanner, and the git hook that runs it. |
 | `Intune/Windows/` | Remediations, platform scripts, configuration profiles, applications, compliance policies. |
 | `Intune/Windows/Autopilot/` | Hardware hash handling, deployment profiles, Enrollment Status Page configuration. |
-| `Intune/macOS/` | macOS equivalents. |
 | `Graph/` | Microsoft Graph tooling not tied to a single Intune feature — authentication patterns, tenant reporting, bulk operations. |
+| `Standalone/` | Scripts that run on their own: local device work, diagnostics, log collection, one-off utilities. No Intune delivery, no Graph. |
 
 Folders are created by the first file that belongs in them, so not every path
 above exists yet.
+
+### Where a new script goes
+
+| If it... | It belongs in |
+| --- | --- |
+| is delivered, enforced, or reported on through Intune | `Intune/<Platform>/` |
+| authenticates to Microsoft Graph | `Graph/` |
+| runs by itself on a device or a workstation | `Standalone/` |
+| acts on this repository rather than a tenant or a device | `Tools/` |
+| is a starting point rather than a finished thing | `Templates/` |
+
+If a script fits none of these, that is worth a pause rather than a new folder.
 
 ## Scripts by area
 
@@ -29,13 +43,55 @@ above exists yet.
 | --- | --- | --- |
 | — | _Nothing published yet._ | — |
 
-## Conventions
+## Working in this repo
 
-Repository-wide conventions — naming, error handling, required documentation,
-and the rule against committing real tenant identifiers — are in
+```powershell
+# Once per machine: the only dependency for the checks below.
+Install-Module -Name PSScriptAnalyzer -Scope CurrentUser -Force
+
+# Once per clone: enable the pre-commit scan for tenant identifiers and secrets.
+.\Tools\Install-GitHook.ps1
+
+# Any time: check the working tree by hand.
+.\Tools\Test-SensitiveContent.ps1
+
+# Before pushing: the same analysis CI runs.
+Invoke-ScriptAnalyzer -Path . -Recurse -Settings .\PSScriptAnalyzerSettings.psd1
+
+# Scripts that declare #Requires -Version 5.1 are additionally held to it.
+Invoke-ScriptAnalyzer -Path .\Templates\Remediation -Recurse `
+    -Settings .\PSScriptAnalyzerSettings.WindowsPowerShell.psd1
+```
+
+New work starts from a template — `Templates/Script-Template.ps1` for tooling
+run against a tenant, `Templates/Remediation/` for scripts that run on a device.
+[`Templates/README.md`](Templates/README.md) explains which applies.
+
+## Quality gates
+
+`.github/workflows/ci.yml` runs on every push and pull request:
+
+| Check | What it enforces |
+| --- | --- |
+| PSScriptAnalyzer | ParseError, Error and Warning findings fail the build, using `PSScriptAnalyzerSettings.psd1`. |
+| Windows PowerShell 5.1 compatibility | Scripts that declare `#Requires -Version 5.1` are checked against it, and parsed by the 5.1 parser on a Windows runner. Everything else is free to use PowerShell 7. |
+| Sensitive content scan | No tenant identifiers or credential material, with matched values masked so the log stays safe to publish. |
+| Folder READMEs | Every folder documents itself. |
+
+Conventions the checks are derived from — naming, error handling, required
+documentation, and the rule against committing real tenant identifiers — are in
 [CLAUDE.md](CLAUDE.md).
 
-## Disclaimer
+## Licence and usage
 
-These scripts are provided as-is, with no warranty. Test in a lab or pilot ring
-before running anything against production devices.
+Released under the MIT License (see [LICENSE.md](LICENSE.md)). You may use,
+modify and redistribute these scripts, including commercially, provided the
+copyright and licence notice are kept.
+
+This is a personal project, developed in my own time from public
+documentation. It is not affiliated with or endorsed by Microsoft or any
+employer of the author.
+
+The scripts change device and tenant configuration. Anything that writes at
+scale defaults to report-only or -WhatIf. Test in a non-production tenant
+first. No warranty; see LICENSE.md.

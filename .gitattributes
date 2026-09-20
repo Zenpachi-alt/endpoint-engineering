@@ -1,0 +1,45 @@
+# Normalise line endings in the repository and check out Windows line endings
+# for everything the Windows tooling touches. Windows PowerShell 5.1 does not
+# care, but mixed endings produce diffs that are pure noise.
+* text=auto eol=crlf
+
+# PowerShell and Windows-side content.
+*.ps1    text eol=crlf
+*.psm1   text eol=crlf
+*.psd1   text eol=crlf
+*.psrc   text eol=crlf
+*.pssc   text eol=crlf
+*.cmd    text eol=crlf
+*.bat    text eol=crlf
+*.reg    text eol=crlf
+*.xml    text eol=crlf
+*.json   text eol=crlf
+*.csv    text eol=crlf
+*.md     text eol=crlf
+
+# Anything consumed by Linux runners or by git itself must keep LF.
+*.yml    text eol=lf
+*.yaml   text eol=lf
+*.sh     text eol=lf
+Tools/Hooks/** text eol=lf
+
+# Binary: never normalise, never diff as text.
+*.intunewin binary
+*.msi        binary
+*.msix       binary
+*.appx       binary
+*.exe        binary
+*.dll        binary
+*.cab        binary
+*.zip        binary
+*.7z         binary
+*.png        binary
+*.jpg        binary
+*.jpeg       binary
+*.gif        binary
+*.ico        binary
+*.pdf        binary
+*.pfx        binary
+*.p12        binary
+*.cer        binary
+*.der        binary
