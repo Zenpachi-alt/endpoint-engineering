@@ -92,6 +92,13 @@ Conventions the checks are derived from — naming, error handling, required
 documentation, and the rule against committing real tenant identifiers — are in
 [CLAUDE.md](CLAUDE.md).
 
+Claude Code sessions in this repo are held to
+[`.claude/settings.json`](.claude/settings.json), which only restricts. It blocks
+force-pushes, changes to the GitHub repository's settings, unmasked scanner
+output, and reads of secret files, and it asks before reading tenant exports,
+pushing, or merging a pull request. Personal allow rules belong in the
+git-ignored `.claude/settings.local.json`.
+
 ## Licence and usage
 
 Released under the MIT License (see [LICENSE.md](LICENSE.md)). You may use,

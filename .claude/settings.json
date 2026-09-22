@@ -1,0 +1,45 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(git push --force*)",
+      "Bash(git push * --force*)",
+      "Bash(git push -f*)",
+      "Bash(git push * -f*)",
+      "Bash(git push * +*)",
+      "PowerShell(git push --force*)",
+      "PowerShell(git push * --force*)",
+      "PowerShell(git push -f*)",
+      "PowerShell(git push * -f*)",
+      "PowerShell(git push * +*)",
+      "Bash(gh repo edit *)",
+      "Bash(gh repo delete *)",
+      "PowerShell(gh repo edit *)",
+      "PowerShell(gh repo delete *)",
+      "Bash(*Test-SensitiveContent* -Sh*)",
+      "PowerShell(*Test-SensitiveContent* -Sh*)",
+      "Read(.env)",
+      "Read(*.env)",
+      "Read(secrets.json)",
+      "Read(*.secret)",
+      "Read(*.pfx)",
+      "Read(*.p12)",
+      "Read(*.key)",
+      "Read(*.pem)",
+      "Read(*.publishsettings)"
+    ],
+    "ask": [
+      "Read(*AutopilotHWID*.csv)",
+      "Read(*HardwareHash*.csv)",
+      "Read(*-Export.csv)",
+      "Read(*-Export.json)",
+      "Read(*Inventory-*.csv)",
+      "Read(*Inventory-*.json)",
+      "Read(Reports/**)",
+      "Read(Sandbox/**)",
+      "Bash(git push *)",
+      "PowerShell(git push *)",
+      "Bash(gh pr merge *)",
+      "PowerShell(gh pr merge *)"
+    ]
+  }
+}
