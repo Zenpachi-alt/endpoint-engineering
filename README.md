@@ -15,10 +15,11 @@ with the payload, detection logic, and documentation that belong to it.
 | Path | Contains |
 | --- | --- |
 | `Templates/` | Starting points for new scripts and artifacts. |
-| `Templates/Remediation/` | Detection and remediation script pair for Intune remediation packages. |
+| `Templates/Remediation/` | Detection and remediation script pair for Intune remediation packages, and the optional TimeGuard block that limits how often heavy work runs. |
 | `Tools/` | Repository maintenance: the identifier and secret scanner, and the git hook that runs it. |
 | `Intune/Windows/` | Artifacts that run on a device or are deployed to one: remediations, platform scripts, configuration profiles, applications, compliance policies. |
 | `Intune/Windows/Autopilot/` | Hardware hash handling, deployment profiles, Enrollment Status Page configuration. |
+| `Intune/Windows/Remediations/` | Remediation packages: a detection and remediation script pair per folder. |
 | `Graph/` | Admin-side tooling run from a workstation against a tenant through Microsoft Graph, whatever workload it touches. |
 | `Graph/Autopilot/` | Registering and reporting on Windows Autopilot device identities. |
 | `Graph/Configuration/` | Backup and reporting over Intune configuration objects. |
@@ -52,6 +53,7 @@ If a script fits none of these, that is worth a pause rather than a new folder.
 | Graph / Configuration | [`Backup-IntuneConfiguration.ps1`](Graph/Configuration/Backup-IntuneConfiguration.ps1) | Read-only backup of remediations, platform scripts, configuration profiles and compliance policies. |
 | Graph / Devices | [`Get-ManagedDeviceInventory.ps1`](Graph/Devices/Get-ManagedDeviceInventory.ps1) | Every Intune managed device in the tenant, filterable, with optional CSV export. |
 | Intune / Windows / Autopilot | [`Get-AutopilotHardwareHash.ps1`](Intune/Windows/Autopilot/Get-AutopilotHardwareHash.ps1) | Collects the Autopilot hardware hash on a device during OOBE, offline, with no modules. |
+| Intune / Windows / Remediations | [`SystemFileHealth/`](Intune/Windows/Remediations/SystemFileHealth/) | Finds and repairs corrupt system files: SFC, and DISM only when SFC cannot finish. TimeGuard limits the heavy scans. |
 
 ## Working in this repo
 

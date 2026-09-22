@@ -7,6 +7,7 @@ the device itself.
 | Folder | Contains |
 | --- | --- |
 | `Autopilot/` | Hardware hash collection for Windows Autopilot registration. |
+| `Remediations/` | Remediation packages: one detection and remediation script pair per folder. |
 
 Folders are created by the first file that belongs in them.
 
