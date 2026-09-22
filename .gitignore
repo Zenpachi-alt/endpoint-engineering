@@ -26,6 +26,8 @@ secrets.json
 *.local.ps1
 settings.local.json
 .claude/settings.local.json
+# Claude Code session worktrees - a full checkout of this repo per session.
+.claude/worktrees/
 .vscode/*
 !.vscode/extensions.json
 .idea/
