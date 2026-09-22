@@ -6,7 +6,7 @@ copied into the domain folder it belongs to and renamed after the thing it does.
 | Template | Use for |
 | --- | --- |
 | `Script-Template.ps1` | Admin-side tooling run by a person against a tenant: Graph queries, bulk operations, reporting. |
-| `Remediation/` | Endpoint-side script pairs run by the Intune management extension on a device. |
+| `Remediation/` | Endpoint-side script pairs run by the Intune management extension on a device, and the optional TimeGuard block for packages with heavy checks. |
 
 ## Which one to start from
 
