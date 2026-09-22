@@ -57,6 +57,34 @@ script's `param` block before upload.
 The rules, and the reason for each, are in
 [`Templates/Remediation/README.md`](../../../../Templates/Remediation/README.md#timeguard-limiting-heavy-work).
 
+## The repair source DISM needs
+
+DISM `RestoreHealth` fetches replacement files, and on a managed device where
+they come from is decided by the policy *Specify settings for optional component
+installation and component repair* (Computer Configuration > Administrative
+Templates > System). It writes to
+`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Servicing`:
+
+| Value | Meaning |
+| --- | --- |
+| `RepairContentServerSource` = `2` | Contact Windows Update directly for repair content, even where WSUS is configured for servicing. Normal servicing still goes through WSUS. |
+| `LocalSourcePath` | Paths searched first, separated by `;`. A folder, or a WIM given as `wim:\\SERVER-001\share\file.wim:1`, patched to the same level as the device. |
+
+A device pointed at WSUS with neither value set is the one that fails with
+`0x800F081F`. Reading that key across the fleet predicts those failures before
+the DISM branch is ever reached, which is worth doing first: the branch only
+runs for the devices SFC alone could not fix.
+
+Two wrinkles:
+
+- On Windows 10 2004 through Windows 11 21H2, setting *Specify source service
+  for specific classes of Windows Updates* to WSUS for feature or quality
+  updates stops the repair content downloading even when this policy says
+  Windows Update.
+- Windows 11 22H2 and later get Features on Demand and language packs from WSUS
+  itself, through on-premises UUP. Whether corruption repair content follows the
+  same path is worth testing rather than assuming.
+
 ## What the report shows
 
 Each script writes one line, which Intune shows in the device status report.
