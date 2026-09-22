@@ -85,6 +85,26 @@ Two wrinkles:
   itself, through on-premises UUP. Whether corruption repair content follows the
   same path is worth testing rather than assuming.
 
+## Rolling it out
+
+SFC is the well-travelled path. The DISM branch runs only where SFC could not
+finish, so it sees little traffic and deserves a pilot.
+
+1. **Check the repair source first**, across the devices you plan to assign, as
+   described above. Devices pointed at WSUS with neither `RepairContentServerSource`
+   nor `LocalSourcePath` are the ones where DISM will fail. A detection-only
+   script package is a convenient way to collect that: Intune keeps each
+   device's output line and exports the lot to CSV.
+2. **Assign to a pilot group**, with the schedule you intend to use.
+3. **Watch the report** for `Remediation failed: DISM` (no repair source),
+   `Not repaired: ... waiting for a restart` (expected on some devices; the
+   first check after the restart verifies them), and `Detection failed: SFC
+   result not recognised` (a device installed in another language).
+4. **Force a re-check** on a device by deleting its TimeGuard key, rather than
+   waiting out the interval.
+5. **Broaden the assignment** once the DISM branch has run on real devices and
+   the report says what you expect.
+
 ## What the report shows
 
 Each script writes one line, which Intune shows in the device status report.
