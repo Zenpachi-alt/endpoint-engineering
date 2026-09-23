@@ -53,6 +53,7 @@ If a script fits none of these, that is worth a pause rather than a new folder.
 | Graph / Configuration | [`Backup-IntuneConfiguration.ps1`](Graph/Configuration/Backup-IntuneConfiguration.ps1) | Read-only backup of remediations, platform scripts, configuration profiles and compliance policies. |
 | Graph / Devices | [`Get-ManagedDeviceInventory.ps1`](Graph/Devices/Get-ManagedDeviceInventory.ps1) | Every Intune managed device in the tenant, filterable, with optional CSV export. |
 | Intune / Windows / Autopilot | [`Get-AutopilotHardwareHash.ps1`](Intune/Windows/Autopilot/Get-AutopilotHardwareHash.ps1) | Collects the Autopilot hardware hash on a device during OOBE, offline, with no modules. |
+| Intune / Windows / Remediations | [`ComponentRepairSource/`](Intune/Windows/Remediations/ComponentRepairSource/) | Detection only: where DISM would get repair files on each device, listing the devices where it has none. |
 | Intune / Windows / Remediations | [`SystemFileHealth/`](Intune/Windows/Remediations/SystemFileHealth/) | Finds and repairs corrupt system files: SFC, and DISM only when SFC cannot finish. TimeGuard limits the heavy scans. |
 
 ## Working in this repo
