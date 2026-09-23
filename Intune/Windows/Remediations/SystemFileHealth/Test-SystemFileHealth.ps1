@@ -73,8 +73,8 @@
 
 .NOTES
     Author        : Tomasz Pietryka
-    Version       : 1.0.0
-    Last updated  : 2026-09-22
+    Version       : 1.1.0
+    Last updated  : 2026-09-23
 
     PowerShell    : Windows PowerShell 5.1 only. PowerShell 7 has to be
                     deployed separately and cannot be assumed on a device.
@@ -195,7 +195,7 @@ function Write-LogEntry {
         [string]$Level = 'INFO'
     )
 
-    $line = '{0} [{1}] [PID {2}] {3}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'), $Level, $PID, $Message
+    $line = '{0} [{1}] [PID {2}] {3}' -f (Get-Date).ToString('yyyy-MM-dd HH:mm:ss.fff zzz', [cultureinfo]::InvariantCulture), $Level, $PID, $Message
 
     if ($script:LogFile) {
         try {
@@ -476,7 +476,7 @@ function Get-TimeGuardDecision {
 
 #endregion TimeGuard
 
-#region SystemFileHealth 1.0.0 - keep identical in Test- and Repair-SystemFileHealth.ps1
+#region SystemFileHealth 1.1.0 - keep identical in Test- and Repair-SystemFileHealth.ps1
 function Test-IsElevated {
     <#
         .SYNOPSIS
@@ -573,10 +573,15 @@ function Invoke-SystemFileChecker {
 
     $result = Get-SfcResult -Output ($lines -join ' ')
 
+    # Progress lines ('Verification 97% complete.') would fill the summary and
+    # push out the messages that matter. A number followed by a percent sign
+    # identifies them in any language.
+    $messages = @($lines | Where-Object { $_ -notmatch '\d+\s*%' })
+
     return [pscustomobject]@{
         ExitCode = $exitCode
         Result   = $result
-        Summary  = ($lines | Select-Object -Last 6) -join ' | '
+        Summary  = ($messages | Select-Object -Last 6) -join ' | '
     }
 }
 
