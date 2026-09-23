@@ -123,8 +123,11 @@ script genuinely needs it rather than writing 5.1-compatible code out of habit.
    are masked by default; `-ShowMatch` shows the values locally.
 3. `Invoke-ScriptAnalyzer -Path . -Recurse -Settings .\PSScriptAnalyzerSettings.psd1`
    — CI fails on ParseError, Error and Warning.
+4. `Invoke-Pester -Path .` when a script has tests (`<Script>.Tests.ps1` beside
+   it). Build identifier-shaped test values at run time so the test file passes
+   the scanner too.
 
-CI (`.github/workflows/ci.yml`) repeats all three on every push and pull
+CI (`.github/workflows/ci.yml`) repeats all four on every push and pull
 request, and additionally checks every script that declares
 `#Requires -Version 5.1` against Windows PowerShell, both with
 `PSScriptAnalyzerSettings.WindowsPowerShell.psd1` and with the 5.1 parser on a

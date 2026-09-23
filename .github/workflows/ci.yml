@@ -43,6 +43,21 @@ jobs:
           }
           Write-Output 'PSScriptAnalyzer: clean.'
 
+      - name: Run Pester tests
+        shell: pwsh
+        run: |
+          # Pester 5 syntax. The runner image may carry an older Pester.
+          if (-not (Get-Module -ListAvailable -Name Pester | Where-Object Version -ge ([version]'5.5.0'))) {
+            Install-Module -Name Pester -MinimumVersion 5.5.0 -Scope CurrentUser -Force -SkipPublisherCheck -ErrorAction Stop
+          }
+          Import-Module -Name Pester -MinimumVersion 5.5.0 -ErrorAction Stop
+
+          $config = New-PesterConfiguration
+          $config.Run.Path = '.'
+          $config.Run.Exit = $true
+          $config.Output.Verbosity = 'Detailed'
+          Invoke-Pester -Configuration $config
+
       - name: Check 5.1 compatibility of scripts that declare it
         shell: pwsh
         run: |
