@@ -6,13 +6,17 @@
 
 <#
 .SYNOPSIS
-    Replaces identifying values in text with consistent placeholders before the
-    text leaves the device, and puts the real values back when it returns.
+    Replaces identifying values in text with consistent placeholders, so that
+    only what the reader needs is shared, and puts the real values back.
 
 .DESCRIPTION
     Scrubs a file, the clipboard, or pipeline text. Each distinct value gets a
     stable placeholder, so the result still reads coherently: the same device
     ID is the same placeholder on every line, and on every later run.
+
+    Useful wherever data is shared, inside the organisation or out: tickets,
+    vendor support cases, approved AI tools, documentation. Being allowed to
+    share something is not the same as needing to share all of it.
 
     Replaced, in this order:
         private keys, JWTs, bearer tokens, password=... style values (one way)
@@ -133,7 +137,7 @@
 
 .NOTES
     Author        : Tomasz Pietryka
-    Version       : 1.0.0
+    Version       : 1.0.1
     Last updated  : 2026-09-23
 
     PowerShell    : 7.0 or later. A workstation utility that is never deployed
