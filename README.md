@@ -24,7 +24,7 @@ with the payload, detection logic, and documentation that belong to it.
 | `Graph/Autopilot/` | Registering and reporting on Windows Autopilot device identities. |
 | `Graph/Configuration/` | Backup and reporting over Intune configuration objects. |
 | `Graph/Devices/` | Managed device reporting and inventory. |
-| `Standalone/` | Scripts that run on their own: local device work, diagnostics, log collection, one-off utilities. No Intune delivery, no Graph. |
+| `Standalone/` | Scripts that run on their own: text and log handling, local diagnostics, one-off utilities. No Intune delivery, no Graph. |
 
 Folders are created by the first file that belongs in them, so not every path
 above exists yet.
@@ -55,6 +55,7 @@ If a script fits none of these, that is worth a pause rather than a new folder.
 | Intune / Windows / Autopilot | [`Get-AutopilotHardwareHash.ps1`](Intune/Windows/Autopilot/Get-AutopilotHardwareHash.ps1) | Collects the Autopilot hardware hash on a device during OOBE, offline, with no modules. |
 | Intune / Windows / Remediations | [`ComponentRepairSource/`](Intune/Windows/Remediations/ComponentRepairSource/) | Detection only: where DISM would get repair files on each device, listing the devices where it has none. |
 | Intune / Windows / Remediations | [`SystemFileHealth/`](Intune/Windows/Remediations/SystemFileHealth/) | Finds and repairs corrupt system files: SFC, and DISM only when SFC cannot finish. TimeGuard limits the heavy scans. |
+| Standalone | [`Invoke-TextScrub.ps1`](Standalone/Invoke-TextScrub.ps1) | Replaces identifiers in logs and text with consistent placeholders before they leave the device, and restores them. |
 
 ## Working in this repo
 
@@ -70,6 +71,9 @@ Install-Module -Name PSScriptAnalyzer -Scope CurrentUser -Force
 
 # Before pushing: the same analysis CI runs.
 Invoke-ScriptAnalyzer -Path . -Recurse -Settings .\PSScriptAnalyzerSettings.psd1
+
+# Tests, where a script has them (Pester 5.5 or later).
+Invoke-Pester -Path . -Output Detailed
 
 # Scripts that declare #Requires -Version 5.1 are additionally held to it.
 Invoke-ScriptAnalyzer -Path .\Templates\Remediation -Recurse `
@@ -87,6 +91,7 @@ run against a tenant, `Templates/Remediation/` for scripts that run on a device.
 | Check | What it enforces |
 | --- | --- |
 | PSScriptAnalyzer | ParseError, Error and Warning findings fail the build, using `PSScriptAnalyzerSettings.psd1`. |
+| Pester | Every `*.Tests.ps1` in the repository runs, and a failing test fails the build. |
 | Windows PowerShell 5.1 compatibility | Scripts that declare `#Requires -Version 5.1` are checked against it, and parsed by the 5.1 parser on a Windows runner. Everything else is free to use PowerShell 7. |
 | Sensitive content scan | No tenant identifiers or credential material, with matched values masked so the log stays safe to publish. |
 | Folder READMEs | Every folder documents itself. |
