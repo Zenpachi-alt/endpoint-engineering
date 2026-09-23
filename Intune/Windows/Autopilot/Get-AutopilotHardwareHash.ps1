@@ -94,8 +94,8 @@
 
 .NOTES
     Author        : Tomasz Pietryka
-    Version       : 1.0.0
-    Last updated  : 2026-09-20
+    Version       : 1.1.0
+    Last updated  : 2026-09-23
 
     PowerShell    : Windows PowerShell 5.1 only. PowerShell 7 is not present
                     during OOBE and cannot be assumed on a stock device.
@@ -221,7 +221,7 @@ function Write-LogEntry {
         [string]$Level = 'INFO'
     )
 
-    $line = '{0} [{1}] [PID {2}] {3}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'), $Level, $PID, $Message
+    $line = '{0} [{1}] [PID {2}] {3}' -f (Get-Date).ToString('yyyy-MM-dd HH:mm:ss.fff zzz', [cultureinfo]::InvariantCulture), $Level, $PID, $Message
 
     if ($script:LogFile) {
         try {

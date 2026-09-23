@@ -56,7 +56,10 @@ deliberately.
   check* is enabled. Keeping the files ASCII-only avoids the question entirely.
 - **Logging to disk.** `%ProgramData%\EndpointEngineering\Logs\<script>.log`,
   rotated to a single `.old` copy. A logging failure is reported but never fails
-  the run.
+  the run. Each line starts with the local time and its UTC offset
+  (`2026-09-23 18:26:37.981 +02:00`), formatted with the invariant culture so
+  every device writes it the same way, and it lines up with the UTC times in
+  TimeGuard's messages and Intune's reports.
 
 ## TimeGuard: limiting heavy work
 
