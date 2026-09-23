@@ -12,10 +12,15 @@ to Graph belongs in `Graph/`.
 
 ## Invoke-TextScrub.ps1
 
-Scrubs a log, an export, a script or the clipboard before it leaves the device,
-for a support case, a forum post, or an AI assistant. Every distinct value gets
-a stable placeholder, so the result still reads coherently, and `-Restore` puts
-the real values back into whatever comes back.
+Shares only what the reader needs. Replaces identifiers in a log, an export, a
+script or the clipboard with consistent placeholders, so the text still reads
+coherently: device 001 failed after user 003 signed in. `-Restore` puts the
+real values back into whatever comes back.
+
+Useful wherever data is shared, inside the organisation or out: tickets and
+wikis, vendor and Microsoft support cases, approved AI tools, documentation and
+training material. Being allowed to share something is not the same as needing
+to share all of it; the recipient loses no diagnostic value, only identity.
 
 ### Prerequisites
 
