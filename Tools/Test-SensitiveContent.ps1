@@ -250,7 +250,7 @@ function Get-ScanRule {
             an optional filter that decides whether a match is benign.
     #>
     [CmdletBinding()]
-    [OutputType([psobject[]])]
+    [OutputType([psobject], [array])]
     param ()
 
     @(
@@ -345,7 +345,7 @@ function Get-TargetFile {
             is used and from disk otherwise.
     #>
     [CmdletBinding()]
-    [OutputType([string[]])]
+    [OutputType([string], [object[]])]
     param (
         [Parameter(Mandatory)]
         [ValidateNotNullOrEmpty()]
@@ -403,7 +403,7 @@ function Get-FileLine {
             staged content so that the scan matches the commit.
     #>
     [CmdletBinding()]
-    [OutputType([string[]])]
+    [OutputType([string], [object[]])]
     param (
         [Parameter(Mandatory)]
         [ValidateNotNullOrEmpty()]

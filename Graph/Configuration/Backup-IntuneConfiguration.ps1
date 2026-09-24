@@ -286,6 +286,7 @@ function Get-RetryAfterDelay {
 
 function Get-GraphErrorText {
     [CmdletBinding()]
+    [OutputType([string])]
     param([string]$Body)
     if ([string]::IsNullOrWhiteSpace($Body)) { return 'No response body' }
     try {
@@ -373,6 +374,7 @@ function Get-GraphObject {
 
 function Get-GraphCollection {
     [CmdletBinding()]
+    [OutputType([System.Collections.Generic.List[object]], [object[]])]
     param([Parameter(Mandatory)][string]$Uri)
     $items = [System.Collections.Generic.List[object]]::new()
     $next = $Uri
@@ -402,6 +404,7 @@ function Save-Base64File {
 
 function Get-SafeName {
     [CmdletBinding()]
+    [OutputType([string])]
     param([AllowNull()][string]$Value, [int]$MaxLength = 60)
     if ([string]::IsNullOrWhiteSpace($Value)) { return 'Unnamed' }
     $safe = ($Value -replace '[<>:"/\\|?*\x00-\x1F]', '_') -replace '\s+', ' '
@@ -421,6 +424,7 @@ function Initialize-BackupFolder {
 
 function Format-UtcDate {
     [CmdletBinding()]
+    [OutputType([string])]
     param([AllowNull()]$Value)
     if ($null -eq $Value -or "$Value" -eq '') { return '' }
     try {
@@ -497,6 +501,7 @@ function Format-RunSchedule {
 
 function Format-AssignmentSummary {
     [CmdletBinding()]
+    [OutputType([string])]
     param([AllowNull()]$Assignments)
     $parts = foreach ($assignment in $Assignments) {
         $target = $assignment.target
@@ -529,6 +534,7 @@ function ConvertTo-MatchKey {
     # Normalises a display name for comparison: Unicode compatibility form, dash/quote variants,
     # zero-width characters and BOM removed, all whitespace runs collapsed to one space, trimmed.
     [CmdletBinding()]
+    [OutputType([string])]
     param([AllowNull()][string]$Value)
     if ([string]::IsNullOrEmpty($Value)) { return '' }
     try { $Value = $Value.Normalize([System.Text.NormalizationForm]::FormKC) }
@@ -603,6 +609,7 @@ function Test-Selected {
 function Get-CategoryList {
     # Lists a collection; on failure logs and returns $null so other categories continue.
     [CmdletBinding()]
+    [OutputType([System.Collections.Generic.List[object]], [object[]])]
     param([Parameter(Mandatory)][string]$Label, [Parameter(Mandatory)][string]$Uri, [switch]$Optional)
     try {
         $list = Get-GraphCollection -Uri $Uri
@@ -695,6 +702,7 @@ function Add-ItemNote {
 function Export-DeviceRunState {
     # Exports deviceRunStates for a remediation or platform script. Returns the number of rows.
     [CmdletBinding()]
+    [OutputType([int])]
     param(
         [Parameter(Mandatory)][string]$ObjectUri,
         [Parameter(Mandatory)][string]$Path,
@@ -830,6 +838,7 @@ function Backup-PlatformScript {
 
 function Get-DeviceConfigurationSubType {
     [CmdletBinding()]
+    [OutputType([string])]
     param([string]$GraphType)
     switch -Regex ($GraphType) {
         'CustomConfiguration$'                  { return 'Template - Custom (OMA-URI)' }
