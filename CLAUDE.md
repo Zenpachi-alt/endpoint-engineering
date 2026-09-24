@@ -143,13 +143,17 @@ script genuinely needs it rather than writing 5.1-compatible code out of habit.
    — CI fails on ParseError, Error and Warning.
 4. `Invoke-Pester -Path .` when a script has tests (`<Script>.Tests.ps1` beside
    it). Build identifier-shaped test values at run time so the test file passes
-   the scanner too.
+   the scanner too. The tests of a script that declares `#Requires -Version 5.1`
+   declare it too, and must pass under `powershell.exe` as well as `pwsh`.
+   Windows PowerShell has its own module path, so it needs its own Pester 5.5
+   or later.
 
 CI (`.github/workflows/ci.yml`) repeats all four on every push and pull
 request, and additionally checks every script that declares
 `#Requires -Version 5.1` against Windows PowerShell, both with
 `PSScriptAnalyzerSettings.WindowsPowerShell.psd1` and with the 5.1 parser on a
-Windows runner. The hook is a convenience; CI is the gate.
+Windows runner. The tests of those scripts, which declare 5.1 too, also run
+there under Windows PowerShell 5.1. The hook is a convenience; CI is the gate.
 
 The scanner matches shapes, not meaning. Design-level identifiers that survive
 scrubbing — distinctive policy, app, group or script names, naming conventions,
