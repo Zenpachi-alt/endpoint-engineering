@@ -22,7 +22,7 @@ readable, with the assignment targets resolved to names rather than GUIDs.
 
 | Requirement | Detail |
 | --- | --- |
-| PowerShell | 7.2 or later. Not 5.1: the script uses `-SkipHttpErrorCheck` and ternary syntax. |
+| PowerShell | 7.2 or later. Not 5.1: the script uses `Path.GetRelativePath` and `-Encoding utf8BOM`, which Windows PowerShell lacks. |
 | Module | `Microsoft.Graph.Authentication` 2.0.0 or later |
 | Graph scopes | `DeviceManagementConfiguration.Read.All` always; `DeviceManagementScripts.Read.All` for remediations, platform scripts and compliance policies; `DeviceManagementManagedDevices.Read.All` with `-IncludeDeviceRunStates`; `GroupMember.Read.All` unless `-SkipGroupNameResolution` |
 | Admin consent | Required, once per tenant, for every scope above |
@@ -149,9 +149,13 @@ on a large estate — one request per object, paged — which is why it is opt-i
 
 ### Throttling and failures
 
-Requests are retried on 429 and 5xx, honouring `Retry-After` where the service
-sends it and backing off exponentially with jitter where it does not.
-`-MaxRetries` caps the attempts per request.
+Requests are retried on 429 and 5xx, and when no response arrives at all,
+honouring `Retry-After` where the service sends it and backing off
+exponentially with jitter where it does not. `-MaxRetries` caps the attempts per
+request, the first included, and every retry is written to `Backup.log`. This is
+the shared Graph helpers' retry, tested against the real Graph SDK and a local
+server that throttles; before version 1.2.0 the SDK's own hidden retry sat
+underneath it and multiplied the attempts.
 
 A failure on one object is recorded in that object's index row and the run
 continues; a failure listing a whole category is logged and the other categories
@@ -162,6 +166,14 @@ still run. The exit code says which happened:
 | 0 | Every selected object was backed up. Warnings may still be listed in `BackupIndex.csv`. |
 | 1 | Fatal: the output folder could not be created, or the Graph connection failed. |
 | 2 | Finished, but at least one object or category listing failed. |
+
+### Sessions
+
+A Graph session that already holds the scopes the run needs is reused and left
+open. Otherwise the script signs in, and disconnects that session when the run
+ends. An app-only session connected beforehand for unattended use is never
+replaced: its application permissions are checked against what the run needs,
+and a missing one stops the run before anything is read.
 
 ### The output is tenant data
 

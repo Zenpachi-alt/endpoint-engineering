@@ -19,6 +19,12 @@ outside my organisation.
   from a workstation against the tenant → `Graph/`. Runs by itself, touching
   neither Intune nor a tenant → `Standalone/`. Acts on this repository →
   `Tools/`.
+- **Every script is self-contained.** A single file copied out of this
+  repository runs on its own: no script dot-sources, imports or calls another
+  file from the repository. A launcher beside its own script, such as the
+  Autopilot `.cmd`, is part of that unit rather than a dependency. Code that
+  several scripts need is copied into each of them and kept identical by a
+  test, never loaded from a shared file at run time.
 - **`Standalone/` is not a junk drawer.** A script goes there because it is
   genuinely self-contained, not because deciding was hard. Anything that would
   be delivered through Intune or would talk to Graph belongs in the folder that
@@ -68,6 +74,9 @@ outside my organisation.
   `Write-Host` for errors, and never for data on the pipeline.
 - Microsoft Graph PowerShell SDK or direct Graph REST (`Invoke-MgGraphRequest`)
   only. **Never MSOnline or AzureAD** — both are deprecated.
+- Never name a function after a command or alias that a loaded module exports.
+  An alias beats a function of the same name, silently: the Graph SDK exports
+  `Invoke-GraphRequest` as an alias of `Invoke-MgGraphRequest`.
 - Request the narrowest Graph scopes that work, and verify the granted scopes
   after connecting rather than assuming consent succeeded.
 - Comment-based help is required and must declare, under `.NOTES`:
@@ -88,6 +97,15 @@ operations, reporting. Start from `Templates/Script-Template.ps1`. **PowerShell
 Authenticates, verifies granted scopes, and defaults to report-only or
 `-WhatIf` for anything that writes at scale. Irreversible actions (wipe, retire,
 delete, Autopilot deregistration) are called out in the help.
+
+The Graph plumbing — signing in and verifying scopes, retrying throttled and
+failed requests, following every page — is the `#region Graph helpers` block
+of `Templates/Script-Template.ps1`, carried verbatim by every script under
+`Graph/`. Use it rather than calling `Connect-MgGraph` or looping over
+`Invoke-MgGraphRequest` by hand. Change it only in the template, paste the
+whole region over every copy, and run Pester:
+`Templates/Script-Template.Tests.ps1` fails while any copy differs, and names
+the first line that does. Script-specific code stays outside the region.
 
 **Endpoint-side** — run by the Intune management extension on a managed device.
 Start from `Templates/Remediation/`. **Windows PowerShell 5.1 only**, because

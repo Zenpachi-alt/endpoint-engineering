@@ -99,18 +99,31 @@ cheerfully submitting an empty batch.
 There is a bulk `import` action on the same resource. This script uses the
 per-device create instead: it is the path Microsoft's own tooling has always
 taken, its per-device outcome is unambiguous, and one failure cannot take the
-batch with it. Throttling is handled by retrying on 429 and 5xx, waiting the
-`Retry-After` value when the service sends one and backing off exponentially
-with jitter when it does not.
+batch with it.
 
-The retry path has not been exercised against a real 429. It is written from the
-documented contract, not from an observed throttle.
+### Retries never register a device twice
+
+A registration is resent only after 429 or 503, the answers that mean the
+service did not act on it. After any other failure the device is reported as
+`submitFailed` rather than resent: a second submission of a request that did
+land would be tracked in place of the first and come back as a duplicate.
+Status checks are reads, and are retried on 429, 5xx and a lost connection.
+Every wait is the `Retry-After` value when the service sends one, and
+exponential backoff with jitter when it does not.
+
+This is the shared Graph helpers' retry, tested against the real Graph SDK and a
+local server that throttles. It has not yet met a real tenant's throttle.
 
 ### Verification status
 
 CSV parsing, validation, deduplication, group tag override, request body
 construction and error advice are covered by tests run against Windows
 PowerShell 5.1, including a round trip from a CSV written by the collector.
+
+Version 1.1.0 was also run end to end, under Windows PowerShell 5.1 and
+PowerShell 7, against stand-ins for the Graph cmdlets: a 503 on submission,
+resent once; polling to a final state; and an already-registered device
+reported as a skip with exit code 0.
 
 The Graph calls themselves have not been run against a tenant from this
 repository. The endpoint, scope and request shape come from the current v1.0
