@@ -440,7 +440,7 @@ begin {
         # Scriptblocks resolve variables through the call stack, and Invoke-Replace has
         # its own $Evaluator: inside the wrapper that name would mean the wrapper itself.
         $stepEvaluator = $Evaluator
-        Invoke-Replace $Text $Pattern {
+        Invoke-Replace -Text $Text -Pattern $Pattern -Evaluator {
             param($m)
             if (Test-InPlaceholder -Text $source -Index $m.Index -Length $m.Length -Guard $guard) { return $m.Value }
             & $stepEvaluator $m
@@ -492,21 +492,21 @@ begin {
         $t = $Text
 
         # Secrets first, one way, never stored in the map.
-        $t = Invoke-ScrubStep $t $Rx.PrivateKey { Get-Redaction '[REDACTED-PRIVATE-KEY]' }
-        $t = Invoke-ScrubStep $t $Rx.Jwt { Get-Redaction '[REDACTED-JWT]' }
-        $t = Invoke-ScrubStep $t $Rx.Bearer { param($m) $m.Groups[1].Value + (Get-Redaction '[REDACTED-TOKEN]') }
-        $t = Invoke-ScrubStep $t $Rx.SecretValue { param($m) $m.Groups[1].Value + (Get-Redaction '[REDACTED]') }
+        $t = Invoke-ScrubStep -Text $t -Pattern $Rx.PrivateKey -Evaluator { Get-Redaction '[REDACTED-PRIVATE-KEY]' }
+        $t = Invoke-ScrubStep -Text $t -Pattern $Rx.Jwt -Evaluator { Get-Redaction '[REDACTED-JWT]' }
+        $t = Invoke-ScrubStep -Text $t -Pattern $Rx.Bearer -Evaluator { param($m) $m.Groups[1].Value + (Get-Redaction '[REDACTED-TOKEN]') }
+        $t = Invoke-ScrubStep -Text $t -Pattern $Rx.SecretValue -Evaluator { param($m) $m.Groups[1].Value + (Get-Redaction '[REDACTED]') }
 
-        $t = Invoke-ScrubStep $t $Rx.Email { param($m) Get-Placeholder -Category 'EMAIL' -Value $m.Value }
-        $t = Invoke-ScrubStep $t $Rx.Guid {
+        $t = Invoke-ScrubStep -Text $t -Pattern $Rx.Email -Evaluator { param($m) Get-Placeholder -Category 'EMAIL' -Value $m.Value }
+        $t = Invoke-ScrubStep -Text $t -Pattern $Rx.Guid -Evaluator {
             param($m)
             if ($PreserveGuid -contains $m.Value.ToLowerInvariant()) { $m.Value }
             else { Get-Placeholder -Category 'GUID' -Value $m.Value }
         }
-        $t = Invoke-ScrubStep $t $Rx.Sid { param($m) Get-Placeholder -Category 'SID' -Value $m.Value }
-        $t = Invoke-ScrubStep $t $Rx.Mac { param($m) Get-Placeholder -Category 'MAC' -Value $m.Value }
-        $t = Invoke-ScrubStep $t $Rx.Thumbprint { param($m) Get-Placeholder -Category 'THUMBPRINT' -Value $m.Value }
-        $t = Invoke-ScrubStep $t $Rx.Tenant {
+        $t = Invoke-ScrubStep -Text $t -Pattern $Rx.Sid -Evaluator { param($m) Get-Placeholder -Category 'SID' -Value $m.Value }
+        $t = Invoke-ScrubStep -Text $t -Pattern $Rx.Mac -Evaluator { param($m) Get-Placeholder -Category 'MAC' -Value $m.Value }
+        $t = Invoke-ScrubStep -Text $t -Pattern $Rx.Thumbprint -Evaluator { param($m) Get-Placeholder -Category 'THUMBPRINT' -Value $m.Value }
+        $t = Invoke-ScrubStep -Text $t -Pattern $Rx.Tenant -Evaluator {
             param($m)
             (Get-Placeholder -Category 'TENANT' -Value $m.Groups[1].Value) + $m.Groups[2].Value + '.' + $m.Groups[3].Value
         }
@@ -517,49 +517,49 @@ begin {
             $pattern = '(?<![A-Z0-9.-])((?:[A-Z0-9_-]+\.)*)' + [regex]::Escape($domainName) + '(?![A-Z0-9-]|\.[A-Z0-9])'
             if (-not [regex]::IsMatch($t, $pattern, $RxOptions)) { continue }
             $base = Get-Placeholder -Category 'DOMAIN' -Value $domainName -NoCount
-            $t = Invoke-ScrubStep $t $pattern {
+            $t = Invoke-ScrubStep -Text $t -Pattern $pattern -Evaluator {
                 param($m)
                 if ($m.Groups[1].Value) { Get-Placeholder -Category 'FQDN' -Value $m.Value -Suffix ".$base" }
                 else { Get-Placeholder -Category 'DOMAIN' -Value $domainName }
             }
         }
 
-        $t = Invoke-ScrubStep $t $Rx.Unc {
+        $t = Invoke-ScrubStep -Text $t -Pattern $Rx.Unc -Evaluator {
             param($m)
             $m.Groups[1].Value + (Get-Placeholder -Category 'SERVER' -Value $m.Groups[2].Value)
         }
-        $t = Invoke-ScrubStep $t $Rx.Profile {
+        $t = Invoke-ScrubStep -Text $t -Pattern $Rx.Profile -Evaluator {
             param($m)
             if ($PreserveProfile -contains $m.Groups[2].Value) { $m.Value }
             else { $m.Groups[1].Value + (Get-Placeholder -Category 'USER' -Value $m.Groups[2].Value) }
         }
 
         foreach ($pattern in $Config.HostPatterns) {
-            $t = Invoke-ScrubStep $t $pattern { param($m) Get-Placeholder -Category 'DEVICE' -Value $m.Value }
+            $t = Invoke-ScrubStep -Text $t -Pattern $pattern -Evaluator { param($m) Get-Placeholder -Category 'DEVICE' -Value $m.Value }
         }
 
         # Literal terms: company and project names, and this machine's own identity.
         foreach ($term in ($Config.Terms.Keys | Sort-Object -Property Length -Descending)) {
             $explicit = $Config.Terms[$term]
             $pattern = '(?<![A-Z0-9])' + [regex]::Escape($term) + '(?![A-Z0-9])'
-            $t = Invoke-ScrubStep $t $pattern { Get-Placeholder -Category 'TERM' -Value $term -Explicit $explicit }
+            $t = Invoke-ScrubStep -Text $t -Pattern $pattern -Evaluator { Get-Placeholder -Category 'TERM' -Value $term -Explicit $explicit }
         }
 
         # Extra patterns from config: { "SERIAL": "regex" } gives SERIAL-001.
         foreach ($category in $Config.Extra.Keys) {
-            $t = Invoke-ScrubStep $t $Config.Extra[$category] {
+            $t = Invoke-ScrubStep -Text $t -Pattern $Config.Extra[$category] -Evaluator {
                 param($m)
                 Get-Placeholder -Category $category.ToUpperInvariant() -Value $m.Value
             }
         }
 
-        $t = Invoke-ScrubStep $t $Rx.Ticket {
+        $t = Invoke-ScrubStep -Text $t -Pattern $Rx.Ticket -Evaluator {
             param($m)
             Get-Placeholder -Category 'TICKET' -Value $m.Value -Prefix $m.Groups[1].Value.ToUpperInvariant()
         }
 
         if (-not $Config.SkipIPv4) {
-            $t = Invoke-ScrubStep $t $Rx.IPv4 {
+            $t = Invoke-ScrubStep -Text $t -Pattern $Rx.IPv4 -Evaluator {
                 param($m)
                 if ($m.Value -match '^(127\.|255\.|0\.0\.0\.0$)') { $m.Value }
                 else { Get-Placeholder -Category 'IPV4' -Value $m.Value }
@@ -580,7 +580,7 @@ begin {
         param ([string]$Text)
         if ($Map.Issued.Count -eq 0) { return $Text }
         $pattern = '(?<![A-Z0-9])' + (Get-PlaceholderPattern) + '(?![A-Z0-9])'
-        Invoke-Replace $Text $pattern {
+        Invoke-Replace -Text $Text -Pattern $pattern -Evaluator {
             param($m)
             $Run.Counts['RESTORED'] = [int]$Run.Counts['RESTORED'] + 1
             $Map.Issued[$m.Value.ToLowerInvariant()]
