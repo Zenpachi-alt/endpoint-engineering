@@ -55,7 +55,8 @@ sorted, grouped and piped rather than reopened from a file.
 `IsSupervised`, `StorageTotalGB`, `StorageFreeGB`, `Category`, `EntraDeviceId`,
 `IntuneDeviceId`.
 
-`DaysSinceLastSync` is `$null` for a device that has never synced. Those devices
+`EnrolledDateTime` and `LastSyncDateTime` are UTC `DateTime` values on every
+PowerShell version. `DaysSinceLastSync` is `$null` for a device that has never synced. Those devices
 are always included by `-StaleAfterDays`, because never is staler than any
 threshold.
 
@@ -72,13 +73,16 @@ above.
 
 ### Throttling
 
-Requests are retried on 429 and on 5xx. The wait is the `Retry-After` value when
-the service sends one, and exponential backoff with jitter when it does not, in
-line with Microsoft's guidance. `-MaximumRetryCount` caps the attempts per
-request.
+Requests are retried on 429 and on 5xx, and when no response arrives at all. The
+wait is the `Retry-After` value when the service sends one, and exponential
+backoff with jitter when it does not, in line with Microsoft's guidance.
+`-MaximumRetryCount` caps the attempts per request, the first included.
 
-The retry path has not been exercised against a real 429. It is written from the
-documented contract, not from an observed throttle.
+This is the shared Graph helpers' retry, tested against the real Graph SDK and a
+local server that throttles. That test is how the SDK's own hidden retry came to
+light: before version 1.1.0 the SDK absorbed every 429, gave up after four
+attempts, and threw before this script's loop ever saw the status. The retry
+has not yet met a real tenant's throttle.
 
 ### The output is tenant data
 

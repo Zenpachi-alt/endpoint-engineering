@@ -90,7 +90,8 @@
     ';' where Excel on the device uses a semicolon list separator.
 
 .PARAMETER MaxRetries
-    Attempts per request for throttled (429) and transient (5xx) responses.
+    Attempts per request, the first included, for throttled (429), transient
+    (5xx) and unanswered requests. Each retry is logged to Backup.log.
 
 .EXAMPLE
     .\Backup-IntuneConfiguration.ps1 -OutputPath 'C:\IntuneBackups'
@@ -112,12 +113,13 @@
 
 .NOTES
     Author        : Tomasz Pietryka
-    Version       : 1.1.0
-    Last updated  : 2026-09-20
+    Version       : 1.2.0
+    Last updated  : 2026-09-24
 
-    PowerShell    : 7.2 or later. The script uses -SkipHttpErrorCheck and
-                    ternary syntax, and reads Graph timestamps as strings on
-                    7.5 and later, where ConvertFrom-Json -DateKind exists.
+    PowerShell    : 7.2 or later. The script uses Path.GetRelativePath and
+                    -Encoding utf8BOM, which Windows PowerShell 5.1 lacks, and
+                    keeps Graph timestamps as strings on 7.5 and later, where
+                    ConvertFrom-Json -DateKind exists.
     Graph scopes  : DeviceManagementConfiguration.Read.All, always.
                     DeviceManagementScripts.Read.All, for Remediations,
                     PlatformScripts and CompliancePolicies.
@@ -147,8 +149,14 @@
 
     App-only      : For unattended use, connect with Connect-MgGraph and a
                     certificate before running. The equivalent application
-                    permissions must be granted; the script does not verify
-                    them.
+                    permissions must be granted. The script verifies them
+                    against the session and stops, naming the missing one,
+                    rather than failing object by object; an app-only session
+                    is never replaced by an interactive sign-in.
+
+    Session       : An existing session that already holds the scopes is
+                    reused and left open. Otherwise the script signs in, and
+                    disconnects that session when the run ends.
 
     Not included  : Apps, legacy endpoint security intents
                     (deviceManagement/intents), notification message templates
@@ -220,7 +228,7 @@ $InformationPreference = 'Continue'
 
 $script:GraphBeta      = 'https://graph.microsoft.com/beta'
 $script:GraphV1        = 'https://graph.microsoft.com/v1.0'
-$script:ScriptVersion  = '1.1.0'
+$script:ScriptVersion  = '1.2.0'
 $script:LogFile        = $null
 $script:BackupRoot     = $null
 $script:Index          = [System.Collections.Generic.List[object]]::new()
@@ -233,11 +241,491 @@ $script:MatchedNames   = [System.Collections.Generic.HashSet[string]]::new([Syst
 $script:MatchedIds     = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 $script:SeenObjects    = [System.Collections.Generic.List[object]]::new()
 
-# Keep Graph timestamps as strings where the PowerShell version supports it (7.5+).
-$script:JsonReadParams = @{}
-if ((Get-Command ConvertFrom-Json).Parameters.ContainsKey('DateKind')) {
-    $script:JsonReadParams['DateKind'] = 'String'
+# Passed to every Graph call: the attempt limit from -MaxRetries, and retry
+# notices written to Backup.log as well as to the console.
+$script:GraphRequestOptions = @{
+    MaximumAttempt = $MaxRetries
+    OnRetry        = { param($Message) Write-BackupLog -Level WARN -Message $Message }
 }
+
+#region Graph helpers
+# Shared by every script under Graph/ and identical in each, so that any one of
+# them still runs when copied out on its own. The master copy is the one in
+# Templates/Script-Template.ps1: change it there, paste the whole region over
+# every other copy, and run Invoke-Pester - Templates/Script-Template.Tests.ps1
+# fails while any copy differs. Written for Windows PowerShell 5.1 and for
+# Set-StrictMode -Version Latest, so it runs wherever the script does.
+
+function Get-PropertyValue {
+    <#
+        .SYNOPSIS
+            Reads a property that may not exist, without tripping
+            Set-StrictMode. Graph omits properties that are null, and v1.0 and
+            beta return different sets.
+    #>
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory)]
+        [AllowNull()]
+        $InputObject,
+
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Name
+    )
+
+    if ($null -eq $InputObject) { return $null }
+
+    $property = $InputObject.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $null }
+
+    return $property.Value
+}
+
+function ConvertFrom-GraphJson {
+    <#
+        .SYNOPSIS
+            Parses a Graph response body, keeping timestamps as the text Graph
+            sent wherever ConvertFrom-Json allows it.
+
+        .DESCRIPTION
+            Windows PowerShell 5.1 leaves timestamps as strings, and PowerShell
+            7.5 does so with -DateKind String. PowerShell 7.0 to 7.4 always turn
+            them into DateTime, so code that reads a timestamp accepts either.
+    #>
+    [CmdletBinding()]
+    [OutputType([psobject])]
+    param (
+        [Parameter(Mandatory)]
+        [AllowNull()]
+        [AllowEmptyString()]
+        [string]$Json
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Json)) { return $null }
+
+    $parameters = @{ InputObject = $Json; ErrorAction = 'Stop' }
+    if ((Get-Command -Name ConvertFrom-Json).Parameters.ContainsKey('DateKind')) {
+        $parameters['DateKind'] = 'String'
+    }
+
+    ConvertFrom-Json @parameters
+}
+
+function Get-GraphErrorText {
+    <#
+        .SYNOPSIS
+            Turns an error response body into "code: message", or into the
+            start of the body when it is not a Graph error object.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param (
+        [Parameter(Mandatory)]
+        [AllowNull()]
+        [AllowEmptyString()]
+        [string]$Content
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Content)) { return 'no response body' }
+
+    try {
+        $parsed = ConvertFrom-Json -InputObject $Content -ErrorAction Stop
+        $graphError = Get-PropertyValue -InputObject $parsed -Name 'error'
+        $code = Get-PropertyValue -InputObject $graphError -Name 'code'
+        $message = Get-PropertyValue -InputObject $graphError -Name 'message'
+        if ($code -or $message) { return ('{0}: {1}' -f $code, $message) }
+    }
+    catch {
+        Write-Debug "The response body is not a Graph error object: $($_.Exception.Message)"
+    }
+
+    if ($Content.Length -gt 300) { return $Content.Substring(0, 300) }
+    return $Content
+}
+
+function Get-RetryDelaySecond {
+    <#
+        .SYNOPSIS
+            How long to wait before the next attempt: the Retry-After header
+            when the service sent one, otherwise exponential backoff with
+            jitter, so that parallel runs do not retry in lockstep.
+    #>
+    [CmdletBinding()]
+    [OutputType([int])]
+    param (
+        [Parameter()]
+        [AllowNull()]
+        $ResponseHeaders,
+
+        [Parameter(Mandatory)]
+        [ValidateRange(1, 100)]
+        [int]$Attempt
+    )
+
+    if ($null -ne $ResponseHeaders) {
+        foreach ($key in @($ResponseHeaders.Keys)) {
+            if ($key -ne 'Retry-After') { continue }
+
+            # The value arrives as a string or as a single-element collection.
+            # Five minutes is the ceiling, so a bad header cannot stall a run.
+            $raw = @($ResponseHeaders[$key])[0]
+            $seconds = 0
+            if ([int]::TryParse([string]$raw, [ref]$seconds) -and $seconds -gt 0) {
+                return [Math]::Min($seconds, 300)
+            }
+        }
+    }
+
+    $backoff = [int][Math]::Min([Math]::Pow(2, $Attempt), 60)
+    return $backoff + (Get-Random -Minimum 0 -Maximum 3)
+}
+
+function Test-TransientFailure {
+    <#
+        .SYNOPSIS
+            True when a request failed without an answer from Graph - a
+            dropped connection, a failed name lookup, a timeout - rather than
+            for a reason that would fail again, such as not being signed in.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param (
+        [Parameter(Mandatory)]
+        [ValidateNotNull()]
+        [System.Exception]$Exception
+    )
+
+    # Matched by name: System.Net.Http is not loaded in every Windows
+    # PowerShell session, and a type literal for it would fail there.
+    $transientType = @(
+        'System.Net.Http.HttpRequestException'
+        'System.Net.Sockets.SocketException'
+        'System.Net.WebException'
+        'System.IO.IOException'
+        'System.TimeoutException'
+        'System.Threading.Tasks.TaskCanceledException'
+    )
+
+    for ($current = $Exception; $null -ne $current; $current = $current.InnerException) {
+        for ($type = $current.GetType(); $null -ne $type; $type = $type.BaseType) {
+            if ($transientType -contains $type.FullName) { return $true }
+        }
+    }
+
+    return $false
+}
+
+function Invoke-GraphRequestWithRetry {
+    <#
+        .SYNOPSIS
+            Sends one Graph request and returns the parsed response, retrying
+            throttled and transient failures.
+
+        .DESCRIPTION
+            The Graph SDK retries 429, 503 and 504 by itself - three times,
+            honouring Retry-After - and then throws, even with
+            -SkipHttpErrorCheck. A loop around that one multiplies the attempts
+            and never sees the status code, so the SDK's retry is switched off
+            for the length of the call and this loop is the only one. The
+            previous setting is restored afterwards. The setting is
+            process-wide: do not call this from parallel runspaces.
+
+            GET is retried on 429, 500, 502, 503 and 504, and when no response
+            arrives at all. POST is retried only on 429 and 503, the answers
+            that mean the service did not act on the request: retrying a POST
+            after any other failure could create the same object twice.
+
+            A request that still fails throws. Data['StatusCode'] on the
+            exception holds the last HTTP status, or 0 when nothing came back.
+
+            Each retry is announced with Write-Warning, or handed to -OnRetry
+            instead, for a script that keeps its own log.
+    #>
+    [CmdletBinding()]
+    [OutputType([psobject])]
+    param (
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Uri,
+
+        [Parameter()]
+        [ValidateSet('GET', 'POST')]
+        [string]$Method = 'GET',
+
+        [Parameter()]
+        [AllowNull()]
+        [hashtable]$Body,
+
+        [Parameter()]
+        [ValidateRange(1, 10)]
+        [int]$MaximumAttempt = 5,
+
+        [Parameter()]
+        [AllowNull()]
+        [scriptblock]$OnRetry
+    )
+
+    $retryStatus = if ($Method -eq 'GET') { @(429, 500, 502, 503, 504) } else { @(429, 503) }
+
+    # -WhatIf:$false and -Confirm:$false keep the calling script's -WhatIf or
+    # -Confirm from reaching Set-MgRequestContext, which supports ShouldProcess.
+    $sdkMaxRetry = (Get-MgRequestContext).MaxRetry
+    if ($sdkMaxRetry -ne 0) {
+        $null = Set-MgRequestContext -MaxRetry 0 -WhatIf:$false -Confirm:$false
+    }
+
+    try {
+        $attempt = 0
+
+        while ($true) {
+            $attempt++
+
+            $statusCode = 0
+            $responseHeaders = $null
+            $content = $null
+            $failure = $null
+
+            $request = @{
+                Method                  = $Method
+                Uri                     = $Uri
+                OutputType              = 'Json'
+                StatusCodeVariable      = 'statusCode'
+                ResponseHeadersVariable = 'responseHeaders'
+                SkipHttpErrorCheck      = $true
+                ErrorAction             = 'Stop'
+            }
+            if ($Body) { $request['Body'] = $Body }
+
+            try {
+                $content = Invoke-MgGraphRequest @request
+            }
+            catch {
+                # Not signed in, a malformed request: repeating it cannot help.
+                if (-not (Test-TransientFailure -Exception $_.Exception)) { throw }
+                $failure = $_.Exception
+            }
+
+            if (-not $failure -and $statusCode -ge 200 -and $statusCode -lt 300) {
+                return ConvertFrom-GraphJson -Json $content
+            }
+
+            $outcome = if ($failure) { 'No response' } else { "HTTP $statusCode" }
+            $canRetry = if ($failure) { $Method -eq 'GET' } else { $retryStatus -contains $statusCode }
+
+            if (-not $canRetry -or $attempt -ge $MaximumAttempt) {
+                $detail = if ($failure) { $failure.Message } else { Get-GraphErrorText -Content $content }
+                $exception = [System.Exception]::new(
+                    "$outcome from $Method $Uri after $attempt attempt(s): $detail", $failure)
+                $exception.Data['StatusCode'] = $statusCode
+                throw $exception
+            }
+
+            $delay = Get-RetryDelaySecond -ResponseHeaders $responseHeaders -Attempt $attempt
+            $notice = "$outcome from $Method $Uri. Waiting $delay second(s) before attempt $($attempt + 1) of $MaximumAttempt."
+            if ($OnRetry) { & $OnRetry $notice } else { Write-Warning -Message $notice }
+
+            Start-Sleep -Seconds $delay
+        }
+    }
+    finally {
+        if ($sdkMaxRetry -ne 0) {
+            $null = Set-MgRequestContext -MaxRetry $sdkMaxRetry -WhatIf:$false -Confirm:$false
+        }
+    }
+}
+
+function Get-GraphCollection {
+    <#
+        .SYNOPSIS
+            Reads every page of a Graph collection, following @odata.nextLink
+            until the service stops sending one. A script that reads one page
+            and stops silently under-reports.
+
+        .DESCRIPTION
+            Returns a List even for zero or one item, so Count is always right
+            and ConvertTo-Json always writes an array.
+    #>
+    # The caller receives the List; object[] is the one-element wrapper that
+    # 'return , $items' builds to stop the pipeline unrolling it.
+    [CmdletBinding()]
+    [OutputType([System.Collections.Generic.List[object]], [object[]])]
+    param (
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Uri,
+
+        [Parameter()]
+        [ValidateRange(1, 10)]
+        [int]$MaximumAttempt = 5,
+
+        [Parameter()]
+        [AllowNull()]
+        [scriptblock]$OnRetry
+    )
+
+    # ::new(), not New-Object: a List from New-Object, once stored in an object
+    # property, makes PowerShell throw "Argument types do not match" in an
+    # expression as ordinary as: if ($x.Items) { @($x.Items).Count } else { '' }
+    $items = [System.Collections.Generic.List[object]]::new()
+    $next = $Uri
+    $page = 0
+
+    while ($next) {
+        $page++
+        if ($page -gt 1) { Write-Verbose "Reading page $page of $(($Uri -split '\?')[0])." }
+
+        $response = Invoke-GraphRequestWithRetry -Uri $next -MaximumAttempt $MaximumAttempt -OnRetry $OnRetry
+
+        if ($null -eq $response -or $null -eq $response.PSObject.Properties['value']) {
+            throw "GET $next returned no 'value' list, so it is not a collection."
+        }
+
+        foreach ($item in @($response.value)) { $items.Add($item) }
+        $next = Get-PropertyValue -InputObject $response -Name '@odata.nextLink'
+    }
+
+    return , $items
+}
+
+function Get-MissingGraphScope {
+    <#
+        .SYNOPSIS
+            Returns each required scope that the granted scopes satisfy neither
+            directly nor through one of its broader alternatives.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param (
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [System.Collections.IDictionary]$Scope,
+
+        [Parameter(Mandatory)]
+        [AllowNull()]
+        [AllowEmptyCollection()]
+        [string[]]$Granted
+    )
+
+    foreach ($required in $Scope.Keys) {
+        $satisfied = $false
+
+        foreach ($candidate in @(@($required) + @($Scope[$required]))) {
+            if ($Granted -contains $candidate) { $satisfied = $true; break }
+        }
+
+        if (-not $satisfied) { [string]$required }
+    }
+}
+
+function Connect-GraphSession {
+    <#
+        .SYNOPSIS
+            Reuses the current Microsoft Graph session when it will do, signs
+            in when it will not, and proves the session holds every scope the
+            script needs. Returns $true when it signed in, so the script
+            disconnects only a session it opened.
+
+        .DESCRIPTION
+            -Scope maps each scope the script requests to the broader scopes
+            that also satisfy it:
+
+                [ordered]@{
+                    'DeviceManagementManagedDevices.Read.All' =
+                        @('DeviceManagementManagedDevices.ReadWrite.All')
+                }
+
+            Sign-in requests only the keys, the narrowest set. An existing
+            session holding a broader alternative is accepted, so an
+            administrator who already consented to ReadWrite is not asked to
+            consent to Read as well.
+
+            A delegated session for another tenant, or without a needed scope,
+            is replaced by a new sign-in. An app-only session is never
+            replaced: the function fails and names the permission to grant.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param (
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [System.Collections.IDictionary]$Scope,
+
+        [Parameter()]
+        [AllowEmptyString()]
+        [string]$TenantId,
+
+        [Parameter()]
+        [switch]$UseDeviceCode
+    )
+
+    $context = Get-MgContext
+
+    if ($context -and $TenantId -and $context.TenantId -ne $TenantId -and
+        $context.Account -notlike "*@$TenantId") {
+        Write-Verbose "The current Graph session is for tenant '$($context.TenantId)'; signing in to '$TenantId' instead."
+        $context = $null
+    }
+
+    if ($context) {
+        $granted = @($context.Scopes | Where-Object { $_ })
+        $missing = @(Get-MissingGraphScope -Scope $Scope -Granted $granted)
+        $identity = if ($context.Account) { $context.Account } else { $context.AppName }
+
+        if ($missing.Count -eq 0) {
+            Write-Verbose "Reusing the Graph session of '$identity' in tenant '$($context.TenantId)'."
+            return $false
+        }
+
+        if ([string]$context.AuthType -ne 'Delegated') {
+            if ($granted.Count -eq 0) {
+                Write-Warning "The $($context.AuthType) Graph session of '$identity' lists no permissions, so they cannot be verified. A missing one will fail as HTTP 403."
+                return $false
+            }
+
+            throw "The $($context.AuthType) Graph session of '$identity' lacks $($missing -join ', '). Grant the application permission with admin consent, or run Disconnect-MgGraph and rerun the script to sign in as a user."
+        }
+
+        Write-Warning "The current Graph session lacks $($missing -join ', '). Signing in again with the scopes this script needs."
+    }
+
+    $connectParameters = @{
+        Scopes      = [string[]]@($Scope.Keys)
+        ErrorAction = 'Stop'
+    }
+    if ((Get-Command -Name Connect-MgGraph).Parameters.ContainsKey('NoWelcome')) {
+        $connectParameters['NoWelcome'] = $true
+    }
+    if ($TenantId) { $connectParameters['TenantId'] = $TenantId }
+    if ($UseDeviceCode) {
+        $connectParameters['UseDeviceCode'] = $true
+        Write-Verbose 'Starting device code sign-in. A code and a URL follow.'
+    }
+
+    $null = Connect-MgGraph @connectParameters
+
+    $context = Get-MgContext
+    if (-not $context) { throw 'Connect-MgGraph finished, but no Graph session is available.' }
+
+    # Consent can be partial: sign-in succeeds with whatever was granted.
+    $granted = @($context.Scopes | Where-Object { $_ })
+    $missing = @(Get-MissingGraphScope -Scope $Scope -Granted $granted)
+
+    if ($missing.Count -gt 0) {
+        try {
+            $null = Disconnect-MgGraph -ErrorAction Stop
+        }
+        catch {
+            Write-Warning "Failed to disconnect from Microsoft Graph: $($_.Exception.Message)"
+        }
+
+        throw "Signed in, but consent does not cover $($missing -join ', '). An administrator can grant it for the tenant. Granted: $($granted -join ', ')."
+    }
+
+    Write-Verbose "Connected as '$($context.Account)' in tenant '$($context.TenantId)'."
+    return $true
+}
+#endregion Graph helpers
 
 #region Helpers ---------------------------------------------------------------------------------------
 
@@ -258,132 +746,13 @@ function Write-BackupLog {
     }
 }
 
-function ConvertFrom-GraphJson {
-    [CmdletBinding()]
-    param([Parameter(Mandatory, ValueFromPipeline)][AllowEmptyString()][string]$Json)
-    process {
-        if ([string]::IsNullOrWhiteSpace($Json)) { return $null }
-        ConvertFrom-Json -InputObject $Json @script:JsonReadParams
-    }
-}
-
-function Get-RetryAfterDelay {
-    [CmdletBinding()]
-    param($Headers)
-    if (-not $Headers) { return $null }
-    $value = $null
-    foreach ($key in 'Retry-After', 'retry-after') {
-        try { $value = $Headers[$key] } catch { $value = $null }
-        if ($value) { break }
-    }
-    if (-not $value) { return $null }
-    $seconds = 0
-    if ([int]::TryParse([string](@($value)[0]), [ref]$seconds)) {
-        return [math]::Min([math]::Max($seconds, 1), 300)
-    }
-    return $null
-}
-
-function Get-GraphErrorText {
-    [CmdletBinding()]
-    [OutputType([string])]
-    param([string]$Body)
-    if ([string]::IsNullOrWhiteSpace($Body)) { return 'No response body' }
-    try {
-        $parsed = ConvertFrom-Json -InputObject $Body
-        if ($parsed.error) { return ('{0}: {1}' -f $parsed.error.code, $parsed.error.message) }
-    }
-    catch {
-        Write-Debug "Response body is not a Graph error object; returning it as text. $($_.Exception.Message)"
-    }
-    if ($Body.Length -gt 300) { return $Body.Substring(0, 300) }
-    return $Body
-}
-
-function Invoke-GraphGet {
-    <#
-        GET with retry on 429/5xx (honours Retry-After). Returns the response body as a JSON string.
-        Throws on other failures; the HTTP status is in $_.Exception.Data['StatusCode'].
-    #>
-    [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$Uri)
-
-    $attempt = 0
-    while ($true) {
-        $attempt++
-        $gStatus = $null
-        $gHeaders = $null
-        $body = $null
-        $retryAfter = $null
-        $transportError = $null
-
-        try {
-            $body = Invoke-MgGraphRequest -Method GET -Uri $Uri -OutputType Json -SkipHttpErrorCheck `
-                -StatusCodeVariable 'gStatus' -ResponseHeadersVariable 'gHeaders' -ErrorAction Stop
-        }
-        catch {
-            $transportError = $_.Exception
-            $response = $null
-            if ($transportError.PSObject.Properties['Response']) { $response = $transportError.Response }
-            if ($response -and $response.PSObject.Properties['StatusCode']) {
-                $gStatus = [int]$response.StatusCode
-                try { $retryAfter = [int]$response.Headers.RetryAfter.Delta.TotalSeconds }
-                catch { $retryAfter = $null }
-            }
-            elseif ($transportError.Message -match '\b(429|5\d\d)\b') {
-                $gStatus = [int]$Matches[1]
-            }
-            else {
-                $gStatus = 0
-            }
-        }
-
-        if ($null -eq $gStatus) {
-            # Status variable not populated: infer from the body.
-            if ($body -match '^\s*\{\s*"error"\s*:') {
-                $gStatus = if ($body -match 'TooManyRequests') { 429 } else { 520 }
-            }
-            else {
-                $gStatus = 200
-            }
-        }
-
-        if ($gStatus -ge 200 -and $gStatus -lt 300) { return $body }
-
-        $transient = $gStatus -in 0, 429, 500, 502, 503, 504
-        if ($transient -and $attempt -lt $MaxRetries) {
-            if (-not $retryAfter) { $retryAfter = Get-RetryAfterDelay -Headers $gHeaders }
-            $delay = if ($retryAfter) { $retryAfter } else { [int][math]::Min([math]::Pow(2, $attempt), 60) + (Get-Random -Maximum 3) }
-            Write-BackupLog -Level WARN -Message ('HTTP {0} on GET {1} - retry {2}/{3} in {4}s' -f $gStatus, $Uri, $attempt, ($MaxRetries - 1), $delay)
-            Start-Sleep -Seconds $delay
-            continue
-        }
-
-        $detail = if ($transportError -and -not $body) { $transportError.Message } else { Get-GraphErrorText -Body $body }
-        $exception = [System.Exception]::new(('GET {0} failed (HTTP {1}): {2}' -f $Uri, $gStatus, $detail))
-        $exception.Data['StatusCode'] = $gStatus
-        throw $exception
-    }
-}
-
 function Get-GraphObject {
+    # One GET through the shared helpers, with this run's retry settings. A
+    # failure carries the HTTP status in $_.Exception.Data['StatusCode'].
     [CmdletBinding()]
+    [OutputType([psobject])]
     param([Parameter(Mandatory)][string]$Uri)
-    Invoke-GraphGet -Uri $Uri | ConvertFrom-GraphJson
-}
-
-function Get-GraphCollection {
-    [CmdletBinding()]
-    [OutputType([System.Collections.Generic.List[object]], [object[]])]
-    param([Parameter(Mandatory)][string]$Uri)
-    $items = [System.Collections.Generic.List[object]]::new()
-    $next = $Uri
-    while ($next) {
-        $page = Invoke-GraphGet -Uri $next | ConvertFrom-GraphJson
-        foreach ($item in $page.value) { $items.Add($item) }
-        $next = $page.'@odata.nextLink'
-    }
-    return , $items
+    Invoke-GraphRequestWithRetry -Uri $Uri @GraphRequestOptions
 }
 
 function Save-JsonFile {
@@ -612,7 +981,7 @@ function Get-CategoryList {
     [OutputType([System.Collections.Generic.List[object]], [object[]])]
     param([Parameter(Mandatory)][string]$Label, [Parameter(Mandatory)][string]$Uri, [switch]$Optional)
     try {
-        $list = Get-GraphCollection -Uri $Uri
+        $list = Get-GraphCollection -Uri $Uri @GraphRequestOptions
         Write-BackupLog -Message ('{0}: {1} object(s) in tenant' -f $Label, $list.Count)
         return , $list
     }
@@ -712,7 +1081,7 @@ function Export-DeviceRunState {
     $expandOptions = @('?$expand=managedDevice($select=id,deviceName)', '?$expand=managedDevice', '')
     foreach ($expand in $expandOptions) {
         try {
-            $states = Get-GraphCollection -Uri ($ObjectUri + '/deviceRunStates' + $expand)
+            $states = Get-GraphCollection -Uri ($ObjectUri + '/deviceRunStates' + $expand) @GraphRequestOptions
             break
         }
         catch {
@@ -767,7 +1136,7 @@ function Backup-Remediation {
             }
             $Context.GraphType = 'deviceHealthScript ({0}, 32-bit: {1}, signature check: {2})' -f $object.runAsAccount, $object.runAs32Bit, $object.enforceSignatureCheck
 
-            $Context.Assignments = Get-GraphCollection -Uri "$objectUri/assignments"
+            $Context.Assignments = Get-GraphCollection -Uri "$objectUri/assignments" @GraphRequestOptions
             Save-JsonFile -InputObject $Context.Assignments -Path (Join-Path $Folder 'assignments.json')
 
             if ($IncludeDeviceRunStates) {
@@ -823,7 +1192,7 @@ function Backup-PlatformScript {
                     $Context.GraphType = 'deviceShellScript (run as: {0}, frequency: {1}, retries: {2})' -f $object.runAsAccount, $object.executionFrequency, $object.retryCount
                 }
 
-                $Context.Assignments = Get-GraphCollection -Uri "$objectUri/assignments"
+                $Context.Assignments = Get-GraphCollection -Uri "$objectUri/assignments" @GraphRequestOptions
                 Save-JsonFile -InputObject $Context.Assignments -Path (Join-Path $Folder 'assignments.json')
 
                 if ($IncludeDeviceRunStates) {
@@ -884,11 +1253,11 @@ function Backup-ConfigurationProfile {
                 $Context.SubType = $subType
                 $Context.GraphType = 'configurationPolicy ({0}; {1})' -f $object.platforms, $object.technologies
 
-                $settings = Get-GraphCollection -Uri "$objectUri/settings"
+                $settings = Get-GraphCollection -Uri "$objectUri/settings" @GraphRequestOptions
                 Save-JsonFile -InputObject $settings -Path (Join-Path $Folder 'settings.json')
                 Add-ItemNote -Context $Context -Message "$($settings.Count) setting(s)"
 
-                $Context.Assignments = Get-GraphCollection -Uri "$objectUri/assignments"
+                $Context.Assignments = Get-GraphCollection -Uri "$objectUri/assignments" @GraphRequestOptions
                 Save-JsonFile -InputObject $Context.Assignments -Path (Join-Path $Folder 'assignments.json')
             }
         }
@@ -930,7 +1299,7 @@ function Backup-ConfigurationProfile {
                     }
                 }
 
-                $Context.Assignments = Get-GraphCollection -Uri "$objectUri/assignments"
+                $Context.Assignments = Get-GraphCollection -Uri "$objectUri/assignments" @GraphRequestOptions
                 Save-JsonFile -InputObject $Context.Assignments -Path (Join-Path $Folder 'assignments.json')
             }
         }
@@ -952,15 +1321,15 @@ function Backup-ConfigurationProfile {
                 $Context.SubType = 'Template - Administrative templates'
                 $Context.GraphType = 'groupPolicyConfiguration'
 
-                $definitionValues = Get-GraphCollection -Uri ('{0}/definitionValues?$expand=definition' -f $objectUri)
+                $definitionValues = Get-GraphCollection -Uri ('{0}/definitionValues?$expand=definition' -f $objectUri) @GraphRequestOptions
                 foreach ($definitionValue in $definitionValues) {
-                    $presentationValues = Get-GraphCollection -Uri ('{0}/definitionValues/{1}/presentationValues?$expand=presentation' -f $objectUri, $definitionValue.id)
+                    $presentationValues = Get-GraphCollection -Uri ('{0}/definitionValues/{1}/presentationValues?$expand=presentation' -f $objectUri, $definitionValue.id) @GraphRequestOptions
                     $definitionValue | Add-Member -NotePropertyName 'presentationValues' -NotePropertyValue $presentationValues -Force
                 }
                 Save-JsonFile -InputObject $definitionValues -Path (Join-Path $Folder 'definitionValues.json')
                 Add-ItemNote -Context $Context -Message "$($definitionValues.Count) setting(s)"
 
-                $Context.Assignments = Get-GraphCollection -Uri "$objectUri/assignments"
+                $Context.Assignments = Get-GraphCollection -Uri "$objectUri/assignments" @GraphRequestOptions
                 Save-JsonFile -InputObject $Context.Assignments -Path (Join-Path $Folder 'assignments.json')
             }
         }
@@ -1013,7 +1382,7 @@ function Backup-CompliancePolicy {
                     Add-ItemNote -Context $Context -Message "Uses custom compliance script $scriptId (backed up under CustomComplianceScripts)"
                 }
 
-                $Context.Assignments = Get-GraphCollection -Uri "$objectUri/assignments"
+                $Context.Assignments = Get-GraphCollection -Uri "$objectUri/assignments" @GraphRequestOptions
                 Save-JsonFile -InputObject $Context.Assignments -Path (Join-Path $Folder 'assignments.json')
             }
         }
@@ -1054,57 +1423,38 @@ function Backup-CompliancePolicy {
 #region Connection -------------------------------------------------------------------------------------
 
 function Connect-GraphForBackup {
+    # Connects through the shared helper with the scopes this run needs, and logs
+    # which session the backup runs under. Returns $true when it signed in.
     [CmdletBinding()]
+    [OutputType([bool])]
     param()
 
-    $required = [System.Collections.Generic.List[string]]::new()
-    $required.Add('DeviceManagementConfiguration.Read.All')
+    # Each scope this run needs, with the broader scopes that also satisfy it.
+    $scopes = [ordered]@{
+        'DeviceManagementConfiguration.Read.All' = @('DeviceManagementConfiguration.ReadWrite.All')
+    }
     if ($Category | Where-Object { $_ -in 'Remediations', 'PlatformScripts', 'CompliancePolicies' }) {
-        $required.Add('DeviceManagementScripts.Read.All')
+        $scopes['DeviceManagementScripts.Read.All'] = @('DeviceManagementScripts.ReadWrite.All')
     }
-    if ($IncludeDeviceRunStates) { $required.Add('DeviceManagementManagedDevices.Read.All') }
-    if (-not $SkipGroupNameResolution) { $required.Add('GroupMember.Read.All') }
+    if ($IncludeDeviceRunStates) {
+        $scopes['DeviceManagementManagedDevices.Read.All'] = @('DeviceManagementManagedDevices.ReadWrite.All', 'DeviceManagementManagedDevices.PrivilegedOperations.All')
+    }
+    if (-not $SkipGroupNameResolution) {
+        $scopes['GroupMember.Read.All'] = @('Group.Read.All', 'Group.ReadWrite.All', 'Directory.Read.All', 'Directory.ReadWrite.All')
+    }
 
-    # Broader scopes that also satisfy each requirement
-    $satisfiedBy = @{
-        'DeviceManagementConfiguration.Read.All'  = @('DeviceManagementConfiguration.ReadWrite.All')
-        'DeviceManagementScripts.Read.All'        = @('DeviceManagementScripts.ReadWrite.All')
-        'DeviceManagementManagedDevices.Read.All' = @('DeviceManagementManagedDevices.ReadWrite.All', 'DeviceManagementManagedDevices.PrivilegedOperations.All')
-        'GroupMember.Read.All'                    = @('Group.Read.All', 'Group.ReadWrite.All', 'Directory.Read.All', 'Directory.ReadWrite.All')
-    }
+    $openedHere = Connect-GraphSession -Scope $scopes -TenantId $TenantId
 
     $context = Get-MgContext
-    if ($context -and $TenantId -and $context.TenantId -ne $TenantId) {
-        Write-BackupLog -Message "Existing Graph connection is for tenant $($context.TenantId); reconnecting to $TenantId"
-        $context = $null
+    $identity = if ($context.AuthType -eq 'AppOnly') { "app $($context.AppName)" } else { $context.Account }
+    if ($openedHere) {
+        Write-BackupLog -Message "Connected as $identity to tenant $($context.TenantId)"
+    }
+    else {
+        Write-BackupLog -Message "Using the existing $($context.AuthType) connection ($identity) to tenant $($context.TenantId)"
     }
 
-    if ($context -and $context.AuthType -eq 'AppOnly') {
-        Write-BackupLog -Message "Using existing app-only connection (app: $($context.AppName)). Application permissions are not checked here."
-        return $context
-    }
-
-    if ($context) {
-        $missing = @($required | Where-Object {
-                $scope = $_
-                -not (($context.Scopes -contains $scope) -or ($satisfiedBy[$scope] | Where-Object { $context.Scopes -contains $_ }))
-            })
-        if ($missing.Count -eq 0) {
-            Write-BackupLog -Message "Using existing delegated connection ($($context.Account))"
-            return $context
-        }
-        Write-BackupLog -Message ('Existing connection is missing scope(s): {0}. Reconnecting.' -f ($missing -join ', '))
-    }
-
-    $connectParams = @{ Scopes = $required.ToArray(); ErrorAction = 'Stop' }
-    if ($TenantId) { $connectParams['TenantId'] = $TenantId }
-    if ((Get-Command Connect-MgGraph).Parameters.ContainsKey('NoWelcome')) { $connectParams['NoWelcome'] = $true }
-    Connect-MgGraph @connectParams | Out-Null
-
-    $context = Get-MgContext
-    if (-not $context) { throw 'Connect-MgGraph completed but no Graph context is available.' }
-    Write-BackupLog -Message "Connected as $($context.Account) to tenant $($context.TenantId)"
-    return $context
+    return $openedHere
 }
 
 #endregion
@@ -1112,127 +1462,143 @@ function Connect-GraphForBackup {
 #region Main -------------------------------------------------------------------------------------------
 
 $startedUtc = [datetime]::UtcNow
+$ConnectionOpenedHere = $false
 
 try {
-    if (-not (Test-Path -LiteralPath $OutputPath -PathType Container)) {
-        New-Item -ItemType Directory -Path $OutputPath -Force | Out-Null
-    }
-    $script:BackupRoot = Initialize-BackupFolder -Path (Join-Path (Resolve-Path -LiteralPath $OutputPath).ProviderPath ('IntuneBackup_{0}' -f (Get-Date -Format 'yyyyMMdd-HHmmss')))
-    $script:LogFile = Join-Path $script:BackupRoot 'Backup.log'
-    Write-BackupLog -Message "Backup-IntuneConfiguration $script:ScriptVersion started. Output: $script:BackupRoot"
-    Write-BackupLog -Message ('Categories: {0}; Name filter: {1}; Id filter: {2}; Run states: {3}; OMA secrets: {4}' -f
-        ($Category -join ', '), ($(if ($Name) { $Name.Count } else { 'none' })), ($(if ($Id) { $Id.Count } else { 'none' })),
-        $IncludeDeviceRunStates.IsPresent, $IncludeOmaSecretValues.IsPresent)
-    Write-BackupLog -Message ('Requested tenant: {0}; attempts per request: {1}' -f
-        ($(if ($TenantId) { $TenantId } else { 'signed-in user home tenant' })), $MaxRetries)
-    if ($IncludeOmaSecretValues) {
-        Write-BackupLog -Level WARN -Message 'Encrypted OMA-URI values will be written to disk in plain text.'
-    }
-
-    $graphContext = Connect-GraphForBackup
-}
-catch {
-    $message = "FATAL: $($_.Exception.Message)"
-    if ($script:LogFile) { Write-BackupLog -Level ERROR -Message $message }
-    else { Write-Error -Message $message -ErrorAction Continue }
-    exit 1
-}
-
-$categoryActions = [ordered]@{
-    Remediations          = { Backup-Remediation }
-    PlatformScripts       = { Backup-PlatformScript }
-    ConfigurationProfiles = { Backup-ConfigurationProfile }
-    CompliancePolicies    = { Backup-CompliancePolicy }
-}
-
-foreach ($categoryName in $categoryActions.Keys) {
-    if ($Category -notcontains $categoryName) { continue }
-    Write-Information "Backing up $categoryName..."
     try {
-        & $categoryActions[$categoryName]
+        if (-not (Test-Path -LiteralPath $OutputPath -PathType Container)) {
+            New-Item -ItemType Directory -Path $OutputPath -Force | Out-Null
+        }
+        $script:BackupRoot = Initialize-BackupFolder -Path (Join-Path (Resolve-Path -LiteralPath $OutputPath).ProviderPath ('IntuneBackup_{0}' -f (Get-Date -Format 'yyyyMMdd-HHmmss')))
+        $script:LogFile = Join-Path $script:BackupRoot 'Backup.log'
+        Write-BackupLog -Message "Backup-IntuneConfiguration $script:ScriptVersion started. Output: $script:BackupRoot"
+        Write-BackupLog -Message ('Categories: {0}; Name filter: {1}; Id filter: {2}; Run states: {3}; OMA secrets: {4}' -f
+            ($Category -join ', '), ($(if ($Name) { $Name.Count } else { 'none' })), ($(if ($Id) { $Id.Count } else { 'none' })),
+            $IncludeDeviceRunStates.IsPresent, $IncludeOmaSecretValues.IsPresent)
+        Write-BackupLog -Message ('Requested tenant: {0}; attempts per request: {1}' -f
+            ($(if ($TenantId) { $TenantId } else { 'signed-in user home tenant' })), $MaxRetries)
+        if ($IncludeOmaSecretValues) {
+            Write-BackupLog -Level WARN -Message 'Encrypted OMA-URI values will be written to disk in plain text.'
+        }
+
+        $ConnectionOpenedHere = Connect-GraphForBackup
+        $graphContext = Get-MgContext
     }
     catch {
-        $script:CategoryErrors++
-        Write-BackupLog -Level ERROR -Message "${categoryName}: unexpected error - $($_.Exception.Message)"
+        $message = "FATAL: $($_.Exception.Message)"
+        if ($script:LogFile) { Write-BackupLog -Level ERROR -Message $message }
+        else { Write-Error -Message $message -ErrorAction Continue }
+        exit 1
     }
-}
 
-# Filters that matched nothing, with the closest names seen in the selected categories
-$unmatchedNames = @($Name | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and -not $script:MatchedNames.Contains($_) })
-$unmatchedIds = @($Id | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and -not $script:MatchedIds.Contains($_) })
-foreach ($entry in $unmatchedNames) {
-    $message = "No object found for -Name '$entry' in the selected categories"
-    if (-not ($entry.Contains('*') -or $entry.Contains('?'))) {
-        $entryKey = ConvertTo-MatchKey -Value $entry
-        $limit = [math]::Max(3, [int][math]::Floor($entryKey.Length * 0.2))
-        $suggestions = @(
-            foreach ($seen in $script:SeenObjects) {
-                if (-not $seen.Key) { continue }
-                if ($seen.Key.IndexOf($entryKey, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
-                    $entryKey.IndexOf($seen.Key, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
-                    [pscustomobject]@{ Seen = $seen; Distance = [math]::Abs($seen.Key.Length - $entryKey.Length) }
-                }
-                elseif ([math]::Abs($seen.Key.Length - $entryKey.Length) -le $limit) {
-                    $distance = Get-EditDistance -First $entryKey -Second $seen.Key
-                    if ($distance -le $limit) { [pscustomobject]@{ Seen = $seen; Distance = $distance } }
-                }
-            }
-        ) | Sort-Object Distance | Select-Object -First 3
-        if ($suggestions) {
-            $message += '. Closest: ' + (($suggestions | ForEach-Object { "'{0}' ({1})" -f $_.Seen.Name, $_.Seen.Id }) -join ', ')
+    $categoryActions = [ordered]@{
+        Remediations          = { Backup-Remediation }
+        PlatformScripts       = { Backup-PlatformScript }
+        ConfigurationProfiles = { Backup-ConfigurationProfile }
+        CompliancePolicies    = { Backup-CompliancePolicy }
+    }
+
+    foreach ($categoryName in $categoryActions.Keys) {
+        if ($Category -notcontains $categoryName) { continue }
+        Write-Information "Backing up $categoryName..."
+        try {
+            & $categoryActions[$categoryName]
+        }
+        catch {
+            $script:CategoryErrors++
+            Write-BackupLog -Level ERROR -Message "${categoryName}: unexpected error - $($_.Exception.Message)"
         }
     }
-    Write-BackupLog -Level WARN -Message $message
-}
-foreach ($entry in $unmatchedIds) { Write-BackupLog -Level WARN -Message "No object found for -Id '$entry' in the selected categories" }
 
-# Index and manifest
-$indexPath = Join-Path $script:BackupRoot 'BackupIndex.csv'
-if ($script:Index.Count -gt 0) {
-    $script:Index | Export-Csv -LiteralPath $indexPath -NoTypeInformation -Encoding utf8BOM -Delimiter $CsvDelimiter
-}
+    # Filters that matched nothing, with the closest names seen in the selected categories
+    $unmatchedNames = @($Name | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and -not $script:MatchedNames.Contains($_) })
+    $unmatchedIds = @($Id | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and -not $script:MatchedIds.Contains($_) })
+    foreach ($entry in $unmatchedNames) {
+        $message = "No object found for -Name '$entry' in the selected categories"
+        if (-not ($entry.Contains('*') -or $entry.Contains('?'))) {
+            $entryKey = ConvertTo-MatchKey -Value $entry
+            $limit = [math]::Max(3, [int][math]::Floor($entryKey.Length * 0.2))
+            $suggestions = @(
+                foreach ($seen in $script:SeenObjects) {
+                    if (-not $seen.Key) { continue }
+                    if ($seen.Key.IndexOf($entryKey, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+                        $entryKey.IndexOf($seen.Key, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                        [pscustomobject]@{ Seen = $seen; Distance = [math]::Abs($seen.Key.Length - $entryKey.Length) }
+                    }
+                    elseif ([math]::Abs($seen.Key.Length - $entryKey.Length) -le $limit) {
+                        $distance = Get-EditDistance -First $entryKey -Second $seen.Key
+                        if ($distance -le $limit) { [pscustomobject]@{ Seen = $seen; Distance = $distance } }
+                    }
+                }
+            ) | Sort-Object Distance | Select-Object -First 3
+            if ($suggestions) {
+                $message += '. Closest: ' + (($suggestions | ForEach-Object { "'{0}' ({1})" -f $_.Seen.Name, $_.Seen.Id }) -join ', ')
+            }
+        }
+        Write-BackupLog -Level WARN -Message $message
+    }
+    foreach ($entry in $unmatchedIds) { Write-BackupLog -Level WARN -Message "No object found for -Id '$entry' in the selected categories" }
 
-$statusCounts = [ordered]@{}
-foreach ($group in ($script:Index | Group-Object -Property Status -NoElement | Sort-Object Name)) { $statusCounts[$group.Name] = $group.Count }
-$manifest = [ordered]@{
-    ScriptVersion          = $script:ScriptVersion
-    StartedUtc             = $startedUtc.ToString('o')
-    CompletedUtc           = [datetime]::UtcNow.ToString('o')
-    TenantId               = $graphContext.TenantId
-    Account                = if ($graphContext.AuthType -eq 'AppOnly') { "app:$($graphContext.AppName)" } else { $graphContext.Account }
-    Categories             = $Category
-    NameFilter             = $Name
-    IdFilter               = $Id
-    UnmatchedNames         = $unmatchedNames
-    UnmatchedIds           = $unmatchedIds
-    IncludeDeviceRunStates = $IncludeDeviceRunStates.IsPresent
-    IncludeOmaSecretValues = $IncludeOmaSecretValues.IsPresent
-    ObjectCount            = $script:Index.Count
-    StatusCounts           = $statusCounts
-    CategoryErrors         = $script:CategoryErrors
-    MaxRetries             = $MaxRetries
-}
-Save-JsonFile -InputObject $manifest -Path (Join-Path $script:BackupRoot 'BackupManifest.json')
+    # Index and manifest
+    $indexPath = Join-Path $script:BackupRoot 'BackupIndex.csv'
+    if ($script:Index.Count -gt 0) {
+        $script:Index | Export-Csv -LiteralPath $indexPath -NoTypeInformation -Encoding utf8BOM -Delimiter $CsvDelimiter
+    }
 
-# Console summary
-Write-Information ''
-Write-Information "Backup folder: $script:BackupRoot"
-if ($script:Index.Count -gt 0) {
-    Write-Information ('{0,-24} {1,-8} {2,6}' -f 'Category', 'Status', 'Count')
-    foreach ($group in ($script:Index | Group-Object -Property Category, Status | Sort-Object Name)) {
-        $first = $group.Group[0]
-        Write-Information ('{0,-24} {1,-8} {2,6}' -f $first.Category, $first.Status, $group.Count)
+    $statusCounts = [ordered]@{}
+    foreach ($group in ($script:Index | Group-Object -Property Status -NoElement | Sort-Object Name)) { $statusCounts[$group.Name] = $group.Count }
+    $manifest = [ordered]@{
+        ScriptVersion          = $script:ScriptVersion
+        StartedUtc             = $startedUtc.ToString('o')
+        CompletedUtc           = [datetime]::UtcNow.ToString('o')
+        TenantId               = $graphContext.TenantId
+        Account                = if ($graphContext.AuthType -eq 'AppOnly') { "app:$($graphContext.AppName)" } else { $graphContext.Account }
+        Categories             = $Category
+        NameFilter             = $Name
+        IdFilter               = $Id
+        UnmatchedNames         = $unmatchedNames
+        UnmatchedIds           = $unmatchedIds
+        IncludeDeviceRunStates = $IncludeDeviceRunStates.IsPresent
+        IncludeOmaSecretValues = $IncludeOmaSecretValues.IsPresent
+        ObjectCount            = $script:Index.Count
+        StatusCounts           = $statusCounts
+        CategoryErrors         = $script:CategoryErrors
+        MaxRetries             = $MaxRetries
+    }
+    Save-JsonFile -InputObject $manifest -Path (Join-Path $script:BackupRoot 'BackupManifest.json')
+
+    # Console summary
+    Write-Information ''
+    Write-Information "Backup folder: $script:BackupRoot"
+    if ($script:Index.Count -gt 0) {
+        Write-Information ('{0,-24} {1,-8} {2,6}' -f 'Category', 'Status', 'Count')
+        foreach ($group in ($script:Index | Group-Object -Property Category, Status | Sort-Object Name)) {
+            $first = $group.Group[0]
+            Write-Information ('{0,-24} {1,-8} {2,6}' -f $first.Category, $first.Status, $group.Count)
+        }
+    }
+    else {
+        Write-Information 'No objects were backed up.'
+    }
+    if ($unmatchedNames.Count -or $unmatchedIds.Count) {
+        Write-Warning ('Filters with no match: {0}' -f (($unmatchedNames + $unmatchedIds) -join '; '))
+    }
+
+    $exitCode = if ($script:FailedCount -gt 0 -or $script:CategoryErrors -gt 0) { 2 } else { 0 }
+    Write-BackupLog -Message ('Finished. Objects: {0}; failed: {1}; category errors: {2}; exit code {3}' -f $script:Index.Count, $script:FailedCount, $script:CategoryErrors, $exitCode)
+    exit $exitCode
+}
+finally {
+    # Close only a session this run opened; leave one the caller brought intact.
+    if ($ConnectionOpenedHere -and (Get-MgContext)) {
+        try {
+            Disconnect-MgGraph -ErrorAction Stop | Out-Null
+            Write-Verbose 'Disconnected from Microsoft Graph.'
+        }
+        catch {
+            Write-Warning "Failed to disconnect from Microsoft Graph: $($_.Exception.Message)"
+        }
     }
 }
-else {
-    Write-Information 'No objects were backed up.'
-}
-if ($unmatchedNames.Count -or $unmatchedIds.Count) {
-    Write-Warning ('Filters with no match: {0}' -f (($unmatchedNames + $unmatchedIds) -join '; '))
-}
-
-$exitCode = if ($script:FailedCount -gt 0 -or $script:CategoryErrors -gt 0) { 2 } else { 0 }
-Write-BackupLog -Message ('Finished. Objects: {0}; failed: {1}; category errors: {2}; exit code {3}' -f $script:Index.Count, $script:FailedCount, $script:CategoryErrors, $exitCode)
-exit $exitCode
 
 #endregion

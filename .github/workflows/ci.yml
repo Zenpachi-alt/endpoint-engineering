@@ -52,6 +52,12 @@ jobs:
           }
           Import-Module -Name Pester -MinimumVersion 5.5.0 -ErrorAction Stop
 
+          # The Graph helper tests skip their real-SDK part without the module.
+          # Here it always runs, against whatever SDK release users would get.
+          if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication | Where-Object Version -ge ([version]'2.0.0'))) {
+            Install-Module -Name Microsoft.Graph.Authentication -MinimumVersion 2.0.0 -Scope CurrentUser -Force -ErrorAction Stop
+          }
+
           $config = New-PesterConfiguration
           $config.Run.Path = '.'
           $config.Run.Exit = $true
