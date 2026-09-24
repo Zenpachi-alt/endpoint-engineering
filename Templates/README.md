@@ -53,8 +53,8 @@ paste the whole region over every copy, and run Pester.
 The tests also exercise the helpers against stand-ins for the SDK, under both
 Windows PowerShell 5.1 and PowerShell 7, and — where
 `Microsoft.Graph.Authentication` is installed — against the real SDK and a
-local server that throttles and pages. CI installs the module, so the real-SDK
-tests always run there.
+local server that throttles and pages. CI runs them under both, and installs
+the module for the PowerShell 7 run, so the real-SDK tests always run there.
 
 ## Declaring the PowerShell version
 

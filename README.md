@@ -95,8 +95,8 @@ run against a tenant, `Templates/Remediation/` for scripts that run on a device.
 | Check | What it enforces |
 | --- | --- |
 | PSScriptAnalyzer | ParseError, Error and Warning findings fail the build, using `PSScriptAnalyzerSettings.psd1`. |
-| Pester | Every `*.Tests.ps1` in the repository runs, and a failing test fails the build. Among them: every script under `Graph/` carries an unchanged copy of the template's Graph helpers. |
-| Windows PowerShell 5.1 compatibility | Scripts that declare `#Requires -Version 5.1` are checked against it, and parsed by the 5.1 parser on a Windows runner. Everything else is free to use PowerShell 7. |
+| Pester | Every `*.Tests.ps1` in the repository runs under PowerShell 7, and a failing test fails the build. Among them: every script under `Graph/` carries an unchanged copy of the template's Graph helpers. |
+| Windows PowerShell 5.1 compatibility | Scripts that declare `#Requires -Version 5.1` are checked against it, and parsed by the 5.1 parser on a Windows runner. Their tests declare it too and run there again, under Windows PowerShell 5.1. Everything else is free to use PowerShell 7. |
 | Sensitive content scan | No tenant identifiers or credential material, with matched values masked so the log stays safe to publish. |
 | Folder READMEs | Every folder documents itself. |
 

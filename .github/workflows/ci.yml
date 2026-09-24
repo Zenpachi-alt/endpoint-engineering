@@ -123,7 +123,7 @@ jobs:
           Write-Output 'Folder READMEs: complete.'
 
   parse-windows-powershell:
-    name: Parse endpoint-side scripts under Windows PowerShell 5.1
+    name: Parse and test under Windows PowerShell 5.1
     runs-on: windows-latest
     steps:
       - name: Check out
@@ -161,3 +161,40 @@ jobs:
           }
 
           Write-Output 'Every script that declares Windows PowerShell 5.1 parses under it.'
+
+      - name: Run tests that declare 5.1 under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          # The analyse job runs every test under PowerShell 7, which cannot
+          # show what fails only on 5.1: .NET Framework types, cmdlets that
+          # behave differently, syntax 5.1 lacks. A test that declares 5.1 is
+          # the test of a script that must run there, so it runs here as well.
+          $targets = @(
+            Get-ChildItem -Path . -Filter *.Tests.ps1 -Recurse -File |
+              Where-Object {
+                (Get-Content -LiteralPath $_.FullName -TotalCount 20) -match '^\s*#Requires\s+-Version\s+5\.1\s*$'
+              }
+          )
+
+          if ($targets.Count -eq 0) {
+            Write-Output 'No tests declare #Requires -Version 5.1.'
+            exit 0
+          }
+
+          # Windows PowerShell ships Pester 3.4, signed by a different publisher
+          # than Pester 5, and a PowerShellGet that cannot install from the
+          # Gallery until the NuGet provider is present. The Gallery also needs
+          # TLS 1.2, which .NET Framework does not always offer by default.
+          if (-not (Get-Module -ListAvailable -Name Pester | Where-Object Version -ge ([version]'5.5.0'))) {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+            $null = Install-PackageProvider -Name NuGet -Scope CurrentUser -Force -ErrorAction Stop
+            Install-Module -Name Pester -MinimumVersion 5.5.0 -Scope CurrentUser -Force -SkipPublisherCheck -ErrorAction Stop
+          }
+          Import-Module -Name Pester -MinimumVersion 5.5.0 -ErrorAction Stop
+          Write-Output "Pester $((Get-Module -Name Pester).Version) on Windows PowerShell $($PSVersionTable.PSVersion)"
+
+          $config = New-PesterConfiguration
+          $config.Run.Path = [string[]]@($targets | ForEach-Object FullName)
+          $config.Run.Exit = $true
+          $config.Output.Verbosity = 'Detailed'
+          Invoke-Pester -Configuration $config
