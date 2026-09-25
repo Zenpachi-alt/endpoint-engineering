@@ -51,7 +51,7 @@ If a script fits none of these, that is worth a pause rather than a new folder.
 | Area | Script | Purpose |
 | --- | --- | --- |
 | Graph / Autopilot | [`Import-AutopilotDeviceIdentity.ps1`](Graph/Autopilot/Import-AutopilotDeviceIdentity.ps1) | Registers devices with Windows Autopilot from a hardware hash CSV. |
-| Graph / Configuration | [`Backup-IntuneConfiguration.ps1`](Graph/Configuration/Backup-IntuneConfiguration.ps1) | Read-only backup of remediations, platform scripts, configuration profiles and compliance policies. |
+| Graph / Configuration | [`Backup-IntuneConfiguration.ps1`](Graph/Configuration/Backup-IntuneConfiguration.ps1) | Read-only backup of remediations, platform scripts, configuration profiles, compliance policies and Windows update policies. |
 | Graph / Devices | [`Get-ManagedDeviceInventory.ps1`](Graph/Devices/Get-ManagedDeviceInventory.ps1) | Every Intune managed device in the tenant, filterable, with optional CSV export. |
 | Intune / Windows / Autopilot | [`Get-AutopilotHardwareHash.ps1`](Intune/Windows/Autopilot/Get-AutopilotHardwareHash.ps1) | Collects the Autopilot hardware hash on a device during OOBE, offline, with no modules. |
 | Intune / Windows / Remediations | [`ComponentRepairSource/`](Intune/Windows/Remediations/ComponentRepairSource/) | Detection only: where DISM would get repair files on each device, listing the devices where it has none. |

@@ -7,6 +7,8 @@
 # Report output written by scripts in this repo - real device and user data.
 *Inventory-*.csv
 *Inventory-*.json
+# Backup-IntuneConfiguration.ps1 output - policy, group and device names.
+IntuneBackup_*/
 Reports/
 Sandbox/
 

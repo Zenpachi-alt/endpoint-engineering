@@ -8,7 +8,8 @@
 <#
 .SYNOPSIS
     Read-only backup of Intune remediations, platform scripts, configuration
-    profiles and compliance policies through Microsoft Graph.
+    profiles, compliance policies and Windows update policies through
+    Microsoft Graph.
 
 .DESCRIPTION
     For each object the script saves the full definition as JSON, its
@@ -42,6 +43,14 @@
                             v1.0 exists; beta used for parity
                             deviceManagement/deviceComplianceScripts
                             beta only; custom compliance
+      WindowsUpdates        deviceManagement/windowsFeatureUpdateProfiles
+                            deviceManagement/windowsQualityUpdatePolicies
+                            deviceManagement/windowsQualityUpdateProfiles
+                            (expedited quality updates)
+                            deviceManagement/windowsDriverUpdateProfiles,
+                            with each profile's driverInventories
+                            beta only; update rings are deviceConfigurations
+                            and are backed up under ConfigurationProfiles
       Name resolution       v1.0 groups/{id}
                             beta deviceManagement/assignmentFilters/{id}
 
@@ -51,7 +60,7 @@
 
 .PARAMETER Category
     One or more of Remediations, PlatformScripts, ConfigurationProfiles,
-    CompliancePolicies. Defaults to all four.
+    CompliancePolicies, WindowsUpdates. Defaults to all five.
 
 .PARAMETER Name
     Limit the backup to objects with these display names. Case-insensitive, and
@@ -96,7 +105,15 @@
 .EXAMPLE
     .\Backup-IntuneConfiguration.ps1 -OutputPath 'C:\IntuneBackups'
 
-    Full backup of all four categories.
+    Full backup of all five categories.
+
+.EXAMPLE
+    .\Backup-IntuneConfiguration.ps1 -OutputPath 'C:\IntuneBackups' -Category ConfigurationProfiles, WindowsUpdates
+
+    Backs up every policy Windows Autopatch works through: update rings, which
+    are configuration profiles, and the feature, quality, expedited and driver
+    update policies, with the approval state of every driver. The other
+    configuration profiles come with it.
 
 .EXAMPLE
     $items = Get-Content .\cmr-items.txt
@@ -113,14 +130,15 @@
 
 .NOTES
     Author        : Tomasz Pietryka
-    Version       : 1.2.0
-    Last updated  : 2026-09-24
+    Version       : 1.3.0
+    Last updated  : 2026-09-25
 
     PowerShell    : 7.2 or later. The script uses Path.GetRelativePath and
                     -Encoding utf8BOM, which Windows PowerShell 5.1 lacks, and
                     keeps Graph timestamps as strings on 7.5 and later, where
                     ConvertFrom-Json -DateKind exists.
-    Graph scopes  : DeviceManagementConfiguration.Read.All, always.
+    Graph scopes  : DeviceManagementConfiguration.Read.All, always. It is the
+                    only scope WindowsUpdates needs.
                     DeviceManagementScripts.Read.All, for Remediations,
                     PlatformScripts and CompliancePolicies.
                     DeviceManagementManagedDevices.Read.All, only with
@@ -163,7 +181,9 @@
                     referenced by compliance actions (their IDs are recorded in
                     Notes), and secret values that Graph does not return, such
                     as some Wi-Fi and VPN keys. Those must be re-entered on
-                    restore.
+                    restore. Windows Autopatch groups themselves, which have
+                    no documented Graph API: the policies and Entra groups an
+                    Autopatch group creates are backed up, the group is not.
 
     Output        : The backup contains policy names, assignment group names and
                     the tenant ID, and with -IncludeDeviceRunStates it names
@@ -191,8 +211,8 @@ param (
     [string]$OutputPath,
 
     [Parameter()]
-    [ValidateSet('Remediations', 'PlatformScripts', 'ConfigurationProfiles', 'CompliancePolicies')]
-    [string[]]$Category = @('Remediations', 'PlatformScripts', 'ConfigurationProfiles', 'CompliancePolicies'),
+    [ValidateSet('Remediations', 'PlatformScripts', 'ConfigurationProfiles', 'CompliancePolicies', 'WindowsUpdates')]
+    [string[]]$Category = @('Remediations', 'PlatformScripts', 'ConfigurationProfiles', 'CompliancePolicies', 'WindowsUpdates'),
 
     [Parameter()]
     [ValidateNotNullOrEmpty()]
@@ -228,7 +248,7 @@ $InformationPreference = 'Continue'
 
 $script:GraphBeta      = 'https://graph.microsoft.com/beta'
 $script:GraphV1        = 'https://graph.microsoft.com/v1.0'
-$script:ScriptVersion  = '1.2.0'
+$script:ScriptVersion  = '1.3.0'
 $script:LogFile        = $null
 $script:BackupRoot     = $null
 $script:Index          = [System.Collections.Generic.List[object]]::new()
@@ -791,21 +811,33 @@ function Initialize-BackupFolder {
     return $Path
 }
 
+function ConvertTo-UtcDateTime {
+    # A Graph timestamp as a UTC DateTime, or $null when it is empty or not a timestamp. Accepts the
+    # string Graph sent and the DateTime that ConvertFrom-Json makes of it on PowerShell 7.0 to 7.4.
+    [CmdletBinding()]
+    [OutputType([datetime])]
+    param([AllowNull()]$Value)
+    if ($null -eq $Value -or "$Value" -eq '') { return $null }
+    if ($Value -is [datetime]) {
+        if ($Value.Kind -eq [DateTimeKind]::Unspecified) { return $Value }
+        return $Value.ToUniversalTime()
+    }
+    $parsed = [datetimeoffset]::MinValue
+    $styles = [System.Globalization.DateTimeStyles]::None
+    if ([datetimeoffset]::TryParse([string]$Value, [cultureinfo]::InvariantCulture, $styles, [ref]$parsed)) {
+        return $parsed.UtcDateTime
+    }
+    return $null
+}
+
 function Format-UtcDate {
     [CmdletBinding()]
     [OutputType([string])]
     param([AllowNull()]$Value)
     if ($null -eq $Value -or "$Value" -eq '') { return '' }
-    try {
-        $utc = if ($Value -is [datetime]) {
-            if ($Value.Kind -eq [DateTimeKind]::Unspecified) { $Value } else { $Value.ToUniversalTime() }
-        }
-        else {
-            [datetimeoffset]::Parse([string]$Value, [cultureinfo]::InvariantCulture).UtcDateTime
-        }
-        return $utc.ToString('dd.MM.yyyy HH:mm') + ' UTC'
-    }
-    catch { return [string]$Value }
+    $utc = ConvertTo-UtcDateTime -Value $Value
+    if ($null -eq $utc) { return [string]$Value }
+    return $utc.ToString('dd.MM.yyyy HH:mm') + ' UTC'
 }
 
 function Resolve-GroupName {
@@ -1021,6 +1053,11 @@ function Invoke-ItemBackup {
         Status       = 'OK'
         Notes        = [System.Collections.Generic.List[string]]::new()
         Folder       = $null
+    }
+    # Graph has no property linking a policy to the Autopatch group that created it. The service
+    # names what it creates "Windows Autopatch ...", so the name is the only sign there is.
+    if ($DisplayName -like 'Windows Autopatch*') {
+        $context.Notes.Add('Named like a policy Windows Autopatch creates; if an Autopatch group owns it, change it through the group')
     }
     try {
         $context.Folder = Initialize-BackupFolder -Path (Join-Path $CategoryRoot ('{0}_{1}' -f (Get-SafeName -Value $DisplayName), $shortId))
@@ -1418,6 +1455,109 @@ function Backup-CompliancePolicy {
     }
 }
 
+function Format-FeatureRollout {
+    # The rollout options of a feature update policy as text: immediate, from a date, or gradual.
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([AllowNull()]$Rollout)
+    $start = if ($Rollout) { $Rollout.offerStartDateTimeInUTC } else { $null }
+    $end = if ($Rollout) { $Rollout.offerEndDateTimeInUTC } else { $null }
+    if (-not $start) { return 'offered as soon as possible' }
+    if (-not $end) { return 'offered from {0}' -f (Format-UtcDate -Value $start) }
+    return 'gradual rollout from {0} to {1}, {2} day(s) between groups' -f (Format-UtcDate -Value $start), (Format-UtcDate -Value $end), $Rollout.offerIntervalInDays
+}
+
+function Backup-WindowsUpdate {
+    # The update policies Windows Autopatch deploys content through. Update rings are
+    # deviceConfigurations and are backed up under ConfigurationProfiles. Autopatch groups have no
+    # documented Graph API; the policies and Entra groups they create are backed up like any other.
+    [CmdletBinding()]
+    param()
+    $label = 'WindowsUpdates'
+    $root = Initialize-BackupFolder -Path (Join-Path $script:BackupRoot $label)
+
+    $sources = @(
+        @{ Segment = 'windowsFeatureUpdateProfiles'; Folder = 'FeatureUpdates' }
+        @{ Segment = 'windowsQualityUpdatePolicies'; Folder = 'QualityUpdates' }
+        @{ Segment = 'windowsQualityUpdateProfiles'; Folder = 'ExpeditedQualityUpdates' }
+        @{ Segment = 'windowsDriverUpdateProfiles'; Folder = 'DriverUpdates' }
+    )
+
+    foreach ($source in $sources) {
+        $list = Get-CategoryList -Label "$label ($($source.Segment))" -Uri "$script:GraphBeta/deviceManagement/$($source.Segment)"
+        if ($null -eq $list) { continue }
+        $subRoot = Join-Path $root $source.Folder
+        $selected = @($list | Where-Object { Test-Selected -DisplayName $_.displayName -ObjectId $_.id })
+        if ($selected.Count -gt 0) { [void](Initialize-BackupFolder -Path $subRoot) }
+
+        foreach ($item in $selected) {
+            Invoke-ItemBackup -Category $label -Item $item -DisplayName ([string]$item.displayName) -CategoryRoot $subRoot -Body {
+                param($Item, $Folder, $Context)
+                $objectUri = '{0}/deviceManagement/{1}/{2}' -f $script:GraphBeta, $source.Segment, $Item.id
+                $object = Get-GraphObject -Uri $objectUri
+                Save-JsonFile -InputObject $object -Path (Join-Path $Folder 'policy.json')
+                $Context.LastModified = $object.lastModifiedDateTime
+
+                switch ($source.Segment) {
+                    'windowsFeatureUpdateProfiles' {
+                        $Context.SubType = 'Feature update'
+                        $version = if ($object.deployableContentDisplayName) { $object.deployableContentDisplayName } else { $object.featureUpdateVersion }
+                        Add-ItemNote -Context $Context -Message ('{0}, {1}' -f $version, (Format-FeatureRollout -Rollout $object.rolloutSettings))
+                        # A finding about the configuration, not the backup, so the status stays OK.
+                        $endOfSupport = ConvertTo-UtcDateTime -Value $object.endOfSupportDate
+                        if ($endOfSupport -and $endOfSupport -lt [datetime]::UtcNow) {
+                            Add-ItemNote -Context $Context -Message ('Target version out of support since {0}' -f (Format-UtcDate -Value $endOfSupport))
+                        }
+                    }
+                    'windowsQualityUpdatePolicies' {
+                        $Context.SubType = 'Quality update'
+                        Add-ItemNote -Context $Context -Message ('Hotpatch: {0}' -f $(if ($object.hotpatchEnabled) { 'on' } else { 'off' }))
+                        $approvals = foreach ($setting in $object.approvalSettings) {
+                            $text = '{0} {1}: {2}' -f $setting.windowsQualityUpdateCategory, $setting.windowsQualityUpdateCadence, $setting.approvalMethodType
+                            if ($setting.approvalMethodType -eq 'automatic') { $text += ' after {0} day(s)' -f $setting.deferredDeploymentInDay }
+                            $text
+                        }
+                        if ($approvals) { Add-ItemNote -Context $Context -Message ('Approvals: {0}' -f ($approvals -join '; ')) }
+                    }
+                    'windowsQualityUpdateProfiles' {
+                        $Context.SubType = 'Expedited quality update'
+                        $settings = $object.expeditedUpdateSettings
+                        $release = if ($object.deployableContentDisplayName) { $object.deployableContentDisplayName } else { Format-UtcDate -Value $settings.qualityUpdateRelease }
+                        Add-ItemNote -Context $Context -Message ('Expedites {0}; restart forced after {1} day(s)' -f $release, $settings.daysUntilForcedReboot)
+                    }
+                    'windowsDriverUpdateProfiles' {
+                        $Context.SubType = 'Driver update - {0} approval' -f $object.approvalType
+                        if ($object.approvalType -eq 'automatic') {
+                            Add-ItemNote -Context $Context -Message ('Approved drivers offered after {0} day(s)' -f $object.deploymentDeferralInDays)
+                        }
+                        $syncState = [string]$object.inventorySyncStatus.driverInventorySyncState
+                        if ($syncState -and $syncState -ne 'success') {
+                            Add-ItemNote -Context $Context -Warning -Message "Driver inventory sync state is '$syncState'; the inventory in this backup may be incomplete"
+                        }
+
+                        # Each driver's approval decision lives only here, and is deleted with the policy.
+                        $drivers = Get-GraphCollection -Uri "$objectUri/driverInventories" @GraphRequestOptions
+                        Save-JsonFile -InputObject $drivers -Path (Join-Path $Folder 'driverInventories.json')
+                        if ($drivers.Count -gt 0) {
+                            $drivers |
+                                Select-Object -Property name, version, manufacturer, driverClass, category, approvalStatus,
+                                    deployDateTime, releaseDateTime, applicableDeviceCount, id |
+                                Export-Csv -LiteralPath (Join-Path $Folder 'driverInventories.csv') -NoTypeInformation -Encoding utf8BOM -Delimiter $CsvDelimiter
+                        }
+                        $byStatus = @($drivers | Group-Object -Property approvalStatus -NoElement | Sort-Object -Property Name |
+                                ForEach-Object { '{0} {1}' -f $_.Count, $_.Name })
+                        $summary = if ($byStatus.Count -gt 0) { ': ' + ($byStatus -join ', ') } else { '' }
+                        Add-ItemNote -Context $Context -Message ('{0} driver(s){1}' -f $drivers.Count, $summary)
+                    }
+                }
+
+                $Context.Assignments = Get-GraphCollection -Uri "$objectUri/assignments" @GraphRequestOptions
+                Save-JsonFile -InputObject $Context.Assignments -Path (Join-Path $Folder 'assignments.json')
+            }
+        }
+    }
+}
+
 #endregion
 
 #region Connection -------------------------------------------------------------------------------------
@@ -1496,6 +1636,7 @@ try {
         PlatformScripts       = { Backup-PlatformScript }
         ConfigurationProfiles = { Backup-ConfigurationProfile }
         CompliancePolicies    = { Backup-CompliancePolicy }
+        WindowsUpdates        = { Backup-WindowsUpdate }
     }
 
     foreach ($categoryName in $categoryActions.Keys) {

@@ -1,16 +1,17 @@
 # Configuration
 
 Admin-side tooling over the Intune configuration surface: remediations, platform
-scripts, configuration profiles and compliance policies, as objects in the
-tenant rather than as things running on a device.
+scripts, configuration profiles, compliance policies and Windows update
+policies, as objects in the tenant rather than as things running on a device.
 
 | Script | Purpose |
 | --- | --- |
-| `Backup-IntuneConfiguration.ps1` | Point-in-time export of four configuration categories, with assignments, embedded scripts and an index. |
+| `Backup-IntuneConfiguration.ps1` | Point-in-time export of five configuration categories, with assignments, embedded scripts and an index. |
+| `Backup-IntuneConfiguration.Tests.ps1` | Pester tests for the Windows updates category and the index helpers. CI runs them on every push. |
 
 ## Backup-IntuneConfiguration.ps1
 
-Reads four categories of Intune object on Microsoft Graph and writes each one to
+Reads five categories of Intune object on Microsoft Graph and writes each one to
 disk as JSON, together with its assignments and any embedded script content. It
 writes nothing to the tenant — every call is an HTTP GET.
 
@@ -24,7 +25,7 @@ readable, with the assignment targets resolved to names rather than GUIDs.
 | --- | --- |
 | PowerShell | 7.2 or later. Not 5.1: the script uses `Path.GetRelativePath` and `-Encoding utf8BOM`, which Windows PowerShell lacks. |
 | Module | `Microsoft.Graph.Authentication` 2.0.0 or later |
-| Graph scopes | `DeviceManagementConfiguration.Read.All` always; `DeviceManagementScripts.Read.All` for remediations, platform scripts and compliance policies; `DeviceManagementManagedDevices.Read.All` with `-IncludeDeviceRunStates`; `GroupMember.Read.All` unless `-SkipGroupNameResolution` |
+| Graph scopes | `DeviceManagementConfiguration.Read.All` always, and the only one Windows update policies need; `DeviceManagementScripts.Read.All` for remediations, platform scripts and compliance policies; `DeviceManagementManagedDevices.Read.All` with `-IncludeDeviceRunStates`; `GroupMember.Read.All` unless `-SkipGroupNameResolution` |
 | Admin consent | Required, once per tenant, for every scope above |
 | Licensing | Microsoft Intune Plan 1, with an active Intune licence on the tenant |
 | Role | Any Intune role with read access to these objects; read-only operator roles suffice |
@@ -50,6 +51,10 @@ $items = Get-Content .\cmr-items.txt
 
 # Wildcards are accepted by -Name
 .\Backup-IntuneConfiguration.ps1 -OutputPath C:\IntuneBackups -Name 'Pilot - *'
+
+# Every policy Windows Autopatch works through: update rings and the update policies
+.\Backup-IntuneConfiguration.ps1 -OutputPath C:\IntuneBackups `
+    -Category ConfigurationProfiles, WindowsUpdates
 ```
 
 ### What a backup looks like
@@ -77,6 +82,13 @@ IntuneBackup_20260920-141530\
         Policies\               policy.json, assignments.json
         CustomComplianceScripts\
                                 script.json, discovery.ps1
+    WindowsUpdates\
+        FeatureUpdates\         policy.json, assignments.json
+        QualityUpdates\         as above
+        ExpeditedQualityUpdates\
+                                as above
+        DriverUpdates\          policy.json, assignments.json,
+                                driverInventories.json, driverInventories.csv
 ```
 
 Embedded script content is written byte-for-byte from the base64 Graph returns,
@@ -98,11 +110,41 @@ directory; the IDs are recorded instead, and the run continues.
 If the account loses group read access mid-run, the script says so once and
 records IDs for the remainder rather than failing.
 
+### Windows updates and Autopatch
+
+`WindowsUpdates` holds the policies Windows Autopatch deploys content through:
+feature update, quality update, expedited quality update and driver update
+policies. Update rings are not in it. Graph stores them as device
+configurations, so they sit under `ConfigurationProfiles\Templates\` with the
+sub-type `Template - Update ring`. To capture everything Autopatch works
+through, back up both categories.
+
+The driver inventory matters most. Under manual approval, each driver's
+approval status (approved, declined, needs review) was decided one driver at a
+time. Those decisions exist only in the policy and are deleted with it.
+`driverInventories.csv` lists every driver with its approval status and
+deployment date. When the inventory's last sync did not succeed, the index row
+is marked `Warning`, because the list may be incomplete.
+
+Autopatch groups themselves are not backed up, because Graph has no documented
+API for them. What a group creates is backed up like anything else: its update
+rings, its update policies, and the Entra groups those are assigned to. Graph
+has no property that links a policy to its group either, so the index notes
+every object whose name follows the Autopatch convention, `Windows Autopatch
+...`. Treat those as belonging to the group. Change them through the group's
+edit flow, and rebuild a lost group rather than restoring its policies from
+JSON: a policy recreated by hand is one the group does not know about.
+
+Some notes are findings about the configuration rather than about the backup,
+and leave the status at `OK`. A feature update policy whose target version is
+past end of support is one of them.
+
 ### The beta endpoint, deliberately
 
 Every call goes to `/beta`. Most of these resources exist nowhere else —
 `deviceHealthScripts`, `deviceManagementScripts`, `configurationPolicies`,
-`groupPolicyConfigurations`, `deviceComplianceScripts`. The two that also exist
+`groupPolicyConfigurations`, `deviceComplianceScripts`, and the four Windows
+update policy types. The two that also exist
 on v1.0 are read on beta as well, so that one backup is not split across two
 contracts with different property sets.
 
@@ -134,7 +176,9 @@ backup folder as a secret from that point on.
 
 Apps, legacy endpoint security intents (`deviceManagement/intents`), and the
 notification message templates that compliance actions reference. Template IDs
-are recorded in the Notes column so a restore knows what it is missing.
+are recorded in the Notes column so a restore knows what it is missing. Windows
+Autopatch groups, as described above: what they create is included, the groups
+are not.
 
 This is an export, not a restore tool. The JSON is the record of what existed;
 putting it back is a separate exercise, and one that needs a human reading the
@@ -178,9 +222,32 @@ and a missing one stops the run before anything is read.
 ### The output is tenant data
 
 Policy names, group names, the tenant ID, and with `-IncludeDeviceRunStates` the
-names of real devices. Write backups outside this repository.
-`Tools/Test-SensitiveContent.ps1` would stop a commit containing one, but the
-better habit is not to put it in the working tree at all.
+names of real devices. Write backups outside this repository. `.gitignore`
+keeps `IntuneBackup_*` folders out of git, and `Tools/Test-SensitiveContent.ps1`
+catches identifier-shaped values such as the tenant ID, but neither recognises a
+policy or group name as sensitive. The better habit is not to put a backup in
+the working tree at all.
+
+### Tests
+
+```powershell
+Install-Module Pester -Scope CurrentUser -SkipPublisherCheck   # once; Pester 5.5 or later
+Invoke-Pester -Path .\Graph\Configuration -Output Detailed
+```
+
+The tests load the script's functions without running its main block, replace
+its two Graph readers with a stand-in tenant held in memory, and write the
+backup to Pester's `TestDrive`. They need no tenant and no Graph module.
+
+They cover the Windows updates category, the timestamp helpers and the Autopatch
+note: which files are written, what the index says, how a failure on one policy
+or one policy type stays contained, and that every read honours `-MaxRetries`.
+The other four categories are not covered yet.
+
+What they cannot show is that Graph still answers as documented. The stand-in
+tenant is built from Microsoft's documentation, so a beta property that changes
+or a page that is wrong passes here and fails against a real tenant. Run the
+script against a test tenant after changing what it reads.
 
 ### Reference
 
