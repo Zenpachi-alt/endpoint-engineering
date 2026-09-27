@@ -61,8 +61,11 @@ If a script fits none of these, that is worth a pause rather than a new folder.
 ## Working in this repo
 
 ```powershell
-# Once per machine: the only dependency for the checks below.
+# Once per machine: the tools for the checks below. CI pins exact versions in
+# the env block at the top of .github/workflows/ci.yml; install those
+# (-RequiredVersion) to see exactly what CI sees.
 Install-Module -Name PSScriptAnalyzer -Scope CurrentUser -Force
+Install-Module -Name Pester -MinimumVersion 5.5.0 -Scope CurrentUser -Force -SkipPublisherCheck
 
 # Once per clone: enable the pre-commit scan for tenant identifiers and secrets.
 .\Tools\Install-GitHook.ps1
@@ -99,6 +102,14 @@ run against a tenant, `Templates/Remediation/` for scripts that run on a device.
 | Windows PowerShell 5.1 compatibility | Scripts that declare `#Requires -Version 5.1` are checked against it, and parsed by the 5.1 parser on a Windows runner. Their tests declare it too and run there again, under Windows PowerShell 5.1. Everything else is free to use PowerShell 7. |
 | Sensitive content scan | No tenant identifiers or credential material, with matched values masked so the log stays safe to publish. |
 | Folder READMEs | Every folder documents itself. |
+
+Every tool CI installs is pinned, so a result changes only with a commit.
+PSScriptAnalyzer, Pester and `Microsoft.Graph.Authentication` are held to exact
+versions in the `env` block at the top of the workflow; raise one there after
+running the checks locally against the new release. Actions are pinned by
+commit, with the release in a comment, and
+[`.github/dependabot.yml`](.github/dependabot.yml) proposes updates to them
+monthly as pull requests that CI checks first.
 
 Conventions the checks are derived from — naming, error handling, required
 documentation, and the rule against committing real tenant identifiers — are in

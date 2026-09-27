@@ -163,6 +163,11 @@ request, and additionally checks every script that declares
 Windows runner. The tests of those scripts, which declare 5.1 too, also run
 there under Windows PowerShell 5.1. The hook is a convenience; CI is the gate.
 
+CI pins every tool it installs: module versions in the `env` block at the top of
+`ci.yml`, actions by commit SHA with the release in a comment. Never loosen a
+pin to a minimum version or a moving tag. Raise a module version only after the
+checks pass locally against it.
+
 The scanner matches shapes, not meaning. Design-level identifiers that survive
 scrubbing — distinctive policy, app, group or script names, naming conventions,
 custom OMA-URIs — still need a human read before anything is published.

@@ -13,26 +13,39 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# The exact version of every module CI installs, so a new release cannot
+# change a result without a commit that says so. Raise one here after running
+# the checks locally against the new version. Actions are pinned by commit
+# below, with the release in a comment; Dependabot proposes updates to those.
+env:
+  PSSCRIPTANALYZER_VERSION: '1.25.0'
+  PESTER_VERSION: '6.2.0'
+  GRAPH_AUTHENTICATION_VERSION: '2.40.0'
+
 jobs:
   analyse:
     name: Analyse and scan
     runs-on: ubuntu-latest
     steps:
       - name: Check out
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install PSScriptAnalyzer
         shell: pwsh
         run: |
-          if (-not (Get-Module -ListAvailable -Name PSScriptAnalyzer)) {
-            Install-Module -Name PSScriptAnalyzer -Scope CurrentUser -Force -ErrorAction Stop
+          # The runner image may carry another version. Each step that runs
+          # the analyzer imports the pinned one by name, so that one is used.
+          $version = [version]$env:PSSCRIPTANALYZER_VERSION
+          if (-not (Get-Module -ListAvailable -Name PSScriptAnalyzer | Where-Object Version -eq $version)) {
+            Install-Module -Name PSScriptAnalyzer -RequiredVersion $version -Scope CurrentUser -Force -ErrorAction Stop
           }
-          (Get-Module -ListAvailable -Name PSScriptAnalyzer | Select-Object -First 1).Version.ToString()
+          Write-Output "PSScriptAnalyzer $version"
 
       - name: Run PSScriptAnalyzer
         shell: pwsh
         run: |
-          $results = Invoke-ScriptAnalyzer -Path . -Recurse -Settings ./PSScriptAnalyzerSettings.psd1 -ErrorAction Stop
+          Import-Module -Name PSScriptAnalyzer -RequiredVersion $env:PSSCRIPTANALYZER_VERSION -ErrorAction Stop
+          $results =Invoke-ScriptAnalyzer -Path . -Recurse -Settings ./PSScriptAnalyzerSettings.psd1 -ErrorAction Stop
           if ($results) {
             $results |
               Sort-Object -Property Severity, ScriptName, Line |
@@ -46,17 +59,28 @@ jobs:
       - name: Run Pester tests
         shell: pwsh
         run: |
-          # Pester 5 syntax. The runner image may carry an older Pester.
-          if (-not (Get-Module -ListAvailable -Name Pester | Where-Object Version -ge ([version]'5.5.0'))) {
-            Install-Module -Name Pester -MinimumVersion 5.5.0 -Scope CurrentUser -Force -SkipPublisherCheck -ErrorAction Stop
+          # The runner image may carry another Pester; the pinned one is
+          # installed beside it and imported by version.
+          $pester = [version]$env:PESTER_VERSION
+          if (-not (Get-Module -ListAvailable -Name Pester | Where-Object Version -eq $pester)) {
+            Install-Module -Name Pester -RequiredVersion $pester -Scope CurrentUser -Force -SkipPublisherCheck -ErrorAction Stop
           }
-          Import-Module -Name Pester -MinimumVersion 5.5.0 -ErrorAction Stop
+          Import-Module -Name Pester -RequiredVersion $pester -ErrorAction Stop
+          Write-Output "Pester $pester"
 
           # The Graph helper tests skip their real-SDK part without the module.
-          # Here it always runs, against whatever SDK release users would get.
-          if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication | Where-Object Version -ge ([version]'2.0.0'))) {
-            Install-Module -Name Microsoft.Graph.Authentication -MinimumVersion 2.0.0 -Scope CurrentUser -Force -ErrorAction Stop
+          # Here it always runs. The tests import the highest version present,
+          # so a newer copy on the runner would silently replace the pin: that
+          # fails the step instead.
+          $graph = [version]$env:GRAPH_AUTHENTICATION_VERSION
+          if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication | Where-Object Version -eq $graph)) {
+            Install-Module -Name Microsoft.Graph.Authentication -RequiredVersion $graph -Scope CurrentUser -Force -ErrorAction Stop
           }
+          $highest = (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication | Sort-Object -Property Version -Descending | Select-Object -First 1).Version
+          if ($highest -ne $graph) {
+            throw "Microsoft.Graph.Authentication $highest on the runner is newer than the pinned $graph, and the tests would use it. Raise GRAPH_AUTHENTICATION_VERSION."
+          }
+          Write-Output "Microsoft.Graph.Authentication $graph"
 
           $config = New-PesterConfiguration
           $config.Run.Path = '.'
@@ -79,6 +103,7 @@ jobs:
             exit 0
           }
 
+          Import-Module -Name PSScriptAnalyzer -RequiredVersion $env:PSSCRIPTANALYZER_VERSION -ErrorAction Stop
           $results = foreach ($target in $targets) {
             Invoke-ScriptAnalyzer -Path $target.FullName -Settings ./PSScriptAnalyzerSettings.WindowsPowerShell.psd1 -ErrorAction Stop
           }
@@ -127,7 +152,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Check out
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Parse scripts that declare 5.1 with the 5.1 parser
         shell: powershell
@@ -185,12 +210,13 @@ jobs:
           # than Pester 5, and a PowerShellGet that cannot install from the
           # Gallery until the NuGet provider is present. The Gallery also needs
           # TLS 1.2, which .NET Framework does not always offer by default.
-          if (-not (Get-Module -ListAvailable -Name Pester | Where-Object Version -ge ([version]'5.5.0'))) {
+          $pester = [version]$env:PESTER_VERSION
+          if (-not (Get-Module -ListAvailable -Name Pester | Where-Object Version -eq $pester)) {
             [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
             $null = Install-PackageProvider -Name NuGet -Scope CurrentUser -Force -ErrorAction Stop
-            Install-Module -Name Pester -MinimumVersion 5.5.0 -Scope CurrentUser -Force -SkipPublisherCheck -ErrorAction Stop
+            Install-Module -Name Pester -RequiredVersion $pester -Scope CurrentUser -Force -SkipPublisherCheck -ErrorAction Stop
           }
-          Import-Module -Name Pester -MinimumVersion 5.5.0 -ErrorAction Stop
+          Import-Module -Name Pester -RequiredVersion $pester -ErrorAction Stop
           Write-Output "Pester $((Get-Module -Name Pester).Version) on Windows PowerShell $($PSVersionTable.PSVersion)"
 
           $config = New-PesterConfiguration

@@ -1,0 +1,12 @@
+# Proposes updates to the actions ci.yml pins by commit. It rewrites the
+# commit and the release comment beside it, and CI runs on the pull request
+# before anything changes. Dependabot cannot follow PowerShell Gallery
+# modules; their versions are the env block at the top of ci.yml.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: CI
