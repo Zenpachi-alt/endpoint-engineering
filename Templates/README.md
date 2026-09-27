@@ -7,7 +7,7 @@ copied into the domain folder it belongs to and renamed after the thing it does.
 | --- | --- |
 | `Script-Template.ps1` | Admin-side tooling run by a person against a tenant: Graph queries, bulk operations, reporting. Holds the master copy of the Graph helpers. |
 | `Script-Template.Tests.ps1` | Tests for the Graph helpers, and the check that every copy under `Graph/` matches the template's. |
-| `Remediation/` | Endpoint-side script pairs run by the Intune management extension on a device, and the optional TimeGuard block for packages with heavy checks. |
+| `Remediation/` | Endpoint-side script pairs run by the Intune management extension on a device, the optional TimeGuard block for packages with heavy checks, and the test harness every package's tests carry. |
 
 ## Which one to start from
 

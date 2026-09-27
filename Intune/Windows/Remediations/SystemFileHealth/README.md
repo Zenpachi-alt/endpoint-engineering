@@ -8,6 +8,7 @@ the package.
 | --- | --- |
 | `Test-SystemFileHealth.ps1` | Detection: `sfc /verifyonly`, plus DISM `CheckHealth`, which reads in seconds whether Windows has flagged the component store. |
 | `Repair-SystemFileHealth.ps1` | Remediation: SFC; DISM only when SFC cannot finish; then SFC again. |
+| `SystemFileHealth.Tests.ps1` | Pester tests: how SFC's messages are read, and both scripts' exit code and output line in every case below. Not deployed. |
 
 ## How it works
 
@@ -149,6 +150,27 @@ Each script writes one line, which Intune shows in the device status report.
   the management extension stops the remediation part-way, TimeGuard has already
   recorded the attempt, so it is not restarted on every trigger.
 - **Detection writes one thing:** its own TimeGuard timestamp.
+
+## Tests
+
+`SystemFileHealth.Tests.ps1` runs both scripts as the Intune management
+extension does, in Windows PowerShell 5.1 with `-File`, with SFC, DISM, the
+elevation check and TimeGuard's registry state replaced by stand-ins. No scan
+runs and nothing on the device changes, so the tests need no administrator
+rights:
+
+```powershell
+Invoke-Pester -Path .\Intune\Windows\Remediations\SystemFileHealth -Output Detailed
+```
+
+They cover every row of [What the report shows](#what-the-report-shows),
+TimeGuard's skips and the runs it lets through, and the rule that a failed
+detection exits `2`, never `1`. They also check that the `SystemFileHealth`
+region is identical in both scripts. The TimeGuard region is checked against
+its canonical copy by `Templates/Remediation/TimeGuard.Tests.ps1`.
+
+What the stand-ins cannot show is how SFC and DISM behave on a real device.
+Pilot a ring first; see [Rolling it out](#rolling-it-out).
 
 ## Licensing and permissions
 

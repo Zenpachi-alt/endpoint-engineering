@@ -13,3 +13,9 @@ Every package starts from [`Templates/Remediation/`](../../../Templates/Remediat
 and keeps its exit code contract: a detection that cannot tell exits `2`, never
 `1`, so a broken check can never start a repair. Packages with heavy checks use
 the TimeGuard block described in the same place.
+
+The contract is tested, not only promised. Every detection script here is
+checked for the structure that keeps it, and each package's `*.Tests.ps1` runs
+its scripts as the Intune management extension does, with stand-ins for the
+parts that touch the device, in every situation they handle.
+[Tests](../../../Templates/Remediation/README.md#tests) describes the harness.

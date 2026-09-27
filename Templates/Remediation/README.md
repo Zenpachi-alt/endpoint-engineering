@@ -8,6 +8,8 @@ the remediation script that runs when detection reports an issue.
 | `Test-ExampleSetting.ps1` | Detection. Read-only. Decides whether the issue is present. |
 | `Repair-ExampleSetting.ps1` | Remediation. Makes the change and verifies it. |
 | `TimeGuard.ps1` | Optional block for packages with heavy checks. Not deployed; its region is pasted into both scripts. See [TimeGuard](#timeguard-limiting-heavy-work). |
+| `ExampleSetting.Tests.ps1` | Tests of the template pair, the exit-code check that covers every detection script in the repository, and the canonical copy of the test harness. See [Tests](#tests). |
+| `TimeGuard.Tests.ps1` | TimeGuard's rules, and the check that every copy of the region matches `TimeGuard.ps1`. |
 
 ## How to use
 
@@ -19,7 +21,9 @@ the remediation script that runs when detection reports an issue.
    Everything outside those regions — logging, exit codes, error handling — is
    the part worth keeping.
 4. If the check or the repair is heavy, add TimeGuard (below).
-5. Update comment-based help, including `.NOTES`, before committing.
+5. Add a `<Noun>.Tests.ps1` beside the pair, with the test harness pasted into
+   its `BeforeAll` block (see [Tests](#tests)).
+6. Update comment-based help, including `.NOTES`, before committing.
 
 ## Exit codes
 
@@ -145,6 +149,57 @@ To force a full run on a device, delete the key.
 [`SystemFileHealth`](../../Intune/Windows/Remediations/SystemFileHealth/) is
 the reference implementation. `Get-TimeGuardDecision` reads no state, so its
 rules can be checked without a device by dot-sourcing `TimeGuard.ps1`.
+
+`TimeGuard.Tests.ps1` fails while any script's copy of the region differs from
+`TimeGuard.ps1`, version line included, and names the first line that does. To
+change TimeGuard, edit `TimeGuard.ps1`, raise the version on its `#region`
+line, paste the whole region over every copy, and run Pester.
+
+## Tests
+
+A detection script's exit code decides whether a remediation runs on every
+device a package is assigned to, so each package's tests check it in every
+situation the scripts handle.
+
+**Every detection script, automatically.** `ExampleSetting.Tests.ps1` reads
+every `Test-*.ps1` under a `Remediations` folder and checks the structure that
+keeps the contract: all of the work inside one `try`, whose catch-all ends with
+`exit $ExitError`, and `$ExitError` set to `2`. A new package is covered as
+soon as its detection script exists.
+
+**Each package, with the test harness.** The harness runs a script as the
+Intune management extension does, `powershell.exe -File` in a process of its
+own, so a test sees the exit code and STDOUT that Intune would.
+`ConvertTo-StubbedScript` replaces the functions that touch the device with
+stand-ins, and everything else runs as written:
+
+```powershell
+$stubs = [ordered]@{
+    # $null: return what the test queues in $Fake.Results.
+    'Invoke-SystemFileChecker' = $null
+    # A body of your own. $Fake is the device the test describes.
+    'Get-TimeGuardValue'       = { $Fake.Registry[$ValueName] }
+}
+$stubbed = ConvertTo-StubbedScript -Path $scriptPath -Stub $stubs -Destination "$TestDrive\stubbed.ps1"
+
+$run = Invoke-RemediationScript -Path $stubbed -Fake @{
+    Results  = @{ 'Invoke-SystemFileChecker' = @{ Throw = 'SFC failed.' } }
+    Registry = @{}
+}
+$run.ExitCode | Should -Be 2
+```
+
+`$run.Fake.Calls` lists every stand-in call in order, and the rest of
+`$run.Fake` holds whatever the stand-ins changed. The scripts always run in
+Windows PowerShell 5.1, whichever host runs Pester, and the tests that run them
+are skipped outside Windows.
+
+The harness is the `#region Remediation test harness` block of
+`ExampleSetting.Tests.ps1`. Package tests carry an unchanged copy, and
+`ExampleSetting.Tests.ps1` fails while any copy differs. Change it there, paste
+the region over every copy, and run Pester.
+[`SystemFileHealth.Tests.ps1`](../../Intune/Windows/Remediations/SystemFileHealth/SystemFileHealth.Tests.ps1)
+is the fullest example.
 
 ## Licensing and permissions
 

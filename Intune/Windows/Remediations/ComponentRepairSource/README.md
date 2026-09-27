@@ -10,6 +10,7 @@ branch runs than after.
 | File | Role |
 | --- | --- |
 | `Test-ComponentRepairSource.ps1` | Detection only. Reads the repair-source policy, asks the Windows Update Agent whether the device uses WSUS, and reports one line. Changes nothing. |
+| `Test-ComponentRepairSource.Tests.ps1` | Pester tests: the verdict for every combination below, and the exit code and output line for each. Not deployed. |
 
 ## How it decides
 
@@ -83,6 +84,19 @@ values and the Windows Update Agent's answer - to
 - **Mixed sources.** Where Windows Update for Business policies send some
   classes of update to Windows Update and others to WSUS, the verdict follows
   the agent's default service.
+
+## Tests
+
+`Test-ComponentRepairSource.Tests.ps1` checks the verdict for each token, then
+runs the script as the Intune management extension does, in Windows PowerShell
+5.1 with `-File`, with the registry reads and the Windows Update Agent query
+replaced by stand-ins. It covers each token's exit code and output line, the
+fallback to the Group Policy values when the agent cannot be queried, and the
+rule that a failed check exits `2`, never `1`:
+
+```powershell
+Invoke-Pester -Path .\Intune\Windows\Remediations\ComponentRepairSource -Output Detailed
+```
 
 ## Licensing and permissions
 
