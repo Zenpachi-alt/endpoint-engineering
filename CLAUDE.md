@@ -118,6 +118,14 @@ must mean "the detection failed", so a broken script never triggers a
 remediation fleet-wide. Remediation scripts verify the change before reporting
 success.
 
+Every remediation package has a `<Noun>.Tests.ps1` that runs its scripts
+through the `#region Remediation test harness` block of
+`Templates/Remediation/ExampleSetting.Tests.ps1`, with stand-ins for whatever
+touches the device, and asserts the exit code and output line of every path.
+The harness and the TimeGuard region follow the same rule as the Graph
+helpers: change the canonical copy, paste the whole region over every copy,
+and run Pester, which fails while any copy differs.
+
 **Declare the version honestly.** `#Requires -Version` is the contract, and CI
 reads it: a script that declares `5.1` is checked for Windows PowerShell
 compatibility and parsed by the 5.1 parser; everything else is analysed against
