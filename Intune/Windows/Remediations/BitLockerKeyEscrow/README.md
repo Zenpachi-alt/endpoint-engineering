@@ -49,8 +49,10 @@ sent a key - and it gives each one a way to send it. Each output line names the
 protectors by ID. Entra ID shows the same GUID, in lower case, as the key ID, so
 any line can be checked against the device's **Recovery keys** in the Intune
 admin center, or against `GET /informationProtection/bitlocker/recoveryKeys`
-in Microsoft Graph. A Graph report that makes that check for every device is
-planned as the next script under `Graph/`.
+in Microsoft Graph.
+[`Get-BitLockerKeyEscrowReport.ps1`](../../../../Graph/Devices/) makes that
+check for every Windows device in the tenant: run it after the pilot, and any
+device still reported `MissingKey` needs a closer look.
 
 ## Intune settings
 
