@@ -327,15 +327,8 @@ Describe 'Timestamps' {
         Format-UtcDate -Value '' | Should -BeExactly ''
     }
 
-    It 'converts a timestamp to a UTC DateTime, and anything else to nothing' {
-        $converted = ConvertTo-UtcDateTime -Value '2026-03-01T12:15:00+02:00'
-
-        $converted | Should -BeOfType [datetime]
-        $converted.Kind | Should -Be ([DateTimeKind]::Utc)
-        $converted.Hour | Should -Be 10
-        ConvertTo-UtcDateTime -Value 'not a timestamp' | Should -BeNullOrEmpty
-        ConvertTo-UtcDateTime -Value $null | Should -BeNullOrEmpty
-    }
+    # ConvertTo-UtcDateTime is one of the Graph helpers, tested in
+    # Templates/Script-Template.Tests.ps1.
 }
 
 Describe 'The Autopatch note in the index' {

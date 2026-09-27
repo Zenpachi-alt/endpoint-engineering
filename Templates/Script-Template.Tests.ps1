@@ -424,6 +424,65 @@ Describe 'Graph helpers' {
         }
     }
 
+    Context 'ConvertTo-UtcDateTime' {
+
+        BeforeAll {
+            $script:QuarterPastTen = [datetime]::new(2026, 3, 1, 10, 15, 0, [DateTimeKind]::Utc)
+        }
+
+        It 'reads <Case> as 10:15 UTC' -ForEach @(
+            @{ Case = 'text ending in Z'; Value = '2026-03-01T10:15:00Z' }
+            @{ Case = 'text with fractional seconds'; Value = '2026-03-01T10:15:00.0000000Z' }
+            @{ Case = 'text with a positive offset'; Value = '2026-03-01T12:15:00+02:00' }
+            @{ Case = 'text with a negative offset'; Value = '2026-03-01T05:15:00-05:00' }
+            @{ Case = 'text without an offset (UTC, not local time)'; Value = '2026-03-01T10:15:00' }
+            @{ Case = 'a DateTime of Utc kind'; Value = [datetime]::new(2026, 3, 1, 10, 15, 0, [DateTimeKind]::Utc) }
+            @{ Case = 'a DateTime of Local kind'; Value = [datetime]::new(2026, 3, 1, 10, 15, 0, [DateTimeKind]::Utc).ToLocalTime() }
+            @{ Case = 'a DateTime of Unspecified kind (taken as UTC)'; Value = [datetime]::new(2026, 3, 1, 10, 15, 0, [DateTimeKind]::Unspecified) }
+            @{ Case = 'a DateTimeOffset'; Value = [datetimeoffset]::new(2026, 3, 1, 12, 15, 0, [timespan]::FromHours(2)) }
+        ) {
+            $result = ConvertTo-UtcDateTime -Value $Value
+
+            $result | Should -BeOfType [datetime]
+            $result.Kind | Should -Be ([DateTimeKind]::Utc)
+            $result | Should -Be $script:QuarterPastTen
+        }
+
+        It 'reads a date without a time as midnight UTC' {
+            $result = ConvertTo-UtcDateTime -Value '2026-03-01'
+
+            $result.Kind | Should -Be ([DateTimeKind]::Utc)
+            $result | Should -Be ([datetime]::new(2026, 3, 1, 0, 0, 0, [DateTimeKind]::Utc))
+        }
+
+        It 'returns $null for <Case>' -ForEach @(
+            @{ Case = '$null'; Value = $null }
+            @{ Case = 'an empty string'; Value = '' }
+            @{ Case = 'whitespace'; Value = '   ' }
+        ) {
+            $result = @(ConvertTo-UtcDateTime -Value $Value)
+
+            $result.Count | Should -BeLessOrEqual 1
+            $null -eq ($result | Select-Object -First 1) | Should -BeTrue
+        }
+
+        It 'throws on text that is not a timestamp, naming it, rather than returning $null' {
+            { ConvertTo-UtcDateTime -Value 'not a timestamp' } | Should -Throw "*'not a timestamp' is not a timestamp*"
+        }
+
+        It 'does not depend on the culture of the session' {
+            $saved = [System.Threading.Thread]::CurrentThread.CurrentCulture
+            try {
+                [System.Threading.Thread]::CurrentThread.CurrentCulture = [cultureinfo]::new('de-DE')
+
+                ConvertTo-UtcDateTime -Value '2026-03-01T12:15:00+02:00' | Should -Be $script:QuarterPastTen
+            }
+            finally {
+                [System.Threading.Thread]::CurrentThread.CurrentCulture = $saved
+            }
+        }
+    }
+
     Context 'Get-GraphCollection' {
 
         It 'follows @odata.nextLink until the service stops sending one' {

@@ -249,6 +249,50 @@ function ConvertFrom-GraphJson {
     ConvertFrom-Json @parameters
 }
 
+function ConvertTo-UtcDateTime {
+    <#
+        .SYNOPSIS
+            Reads a Graph timestamp as a UTC DateTime, or $null when there is
+            none.
+
+        .DESCRIPTION
+            Accepts the text Graph sent, and the DateTime that PowerShell 7.0
+            to 7.4 make of it. Graph sends timestamps in UTC, so text without
+            an offset and a DateTime of unspecified kind are read as UTC, never
+            as local time. Text that is not a timestamp throws, rather than
+            passing for a missing value.
+    #>
+    [CmdletBinding()]
+    [OutputType([datetime])]
+    param (
+        [Parameter(Mandatory)]
+        [AllowNull()]
+        [AllowEmptyString()]
+        $Value
+    )
+
+    if ($null -eq $Value -or [string]::IsNullOrWhiteSpace([string]$Value)) { return $null }
+
+    if ($Value -is [datetimeoffset]) { return $Value.UtcDateTime }
+
+    if ($Value -is [datetime]) {
+        if ($Value.Kind -eq [DateTimeKind]::Unspecified) {
+            return [datetime]::SpecifyKind($Value, [DateTimeKind]::Utc)
+        }
+        return $Value.ToUniversalTime()
+    }
+
+    $styles = [System.Globalization.DateTimeStyles]::AdjustToUniversal -bor
+        [System.Globalization.DateTimeStyles]::AssumeUniversal
+    $parsed = [datetime]::MinValue
+
+    if (-not [datetime]::TryParse([string]$Value, [cultureinfo]::InvariantCulture, $styles, [ref]$parsed)) {
+        throw "'$Value' is not a timestamp. Graph sends ISO 8601 text such as 2026-03-01T10:15:00Z."
+    }
+
+    return $parsed
+}
+
 function Get-GraphErrorText {
     <#
         .SYNOPSIS
@@ -663,37 +707,6 @@ function Connect-GraphSession {
     return $true
 }
 #endregion Graph helpers
-
-function ConvertTo-UtcDateTime {
-    <#
-        .SYNOPSIS
-            Reads a Graph timestamp as a UTC DateTime. The helpers keep
-            timestamps as the text Graph sent where PowerShell allows, and
-            PowerShell 7.0 to 7.4 hand back a DateTime instead, so both arrive
-            here.
-    #>
-    [CmdletBinding()]
-    [OutputType([datetime])]
-    param (
-        [Parameter(Mandatory)]
-        [AllowNull()]
-        $Value
-    )
-
-    if ($null -eq $Value -or [string]::IsNullOrWhiteSpace([string]$Value)) { return $null }
-
-    if ($Value -is [datetime]) {
-        if ($Value.Kind -eq [DateTimeKind]::Unspecified) {
-            return [datetime]::SpecifyKind($Value, [DateTimeKind]::Utc)
-        }
-        return $Value.ToUniversalTime()
-    }
-
-    $styles = [System.Globalization.DateTimeStyles]::AdjustToUniversal -bor
-        [System.Globalization.DateTimeStyles]::AssumeUniversal
-
-    return [datetime]::Parse([string]$Value, [cultureinfo]::InvariantCulture, $styles)
-}
 
 function ConvertTo-DeviceRecord {
     <#

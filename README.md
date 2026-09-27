@@ -52,6 +52,7 @@ If a script fits none of these, that is worth a pause rather than a new folder.
 | --- | --- | --- |
 | Graph / Autopilot | [`Import-AutopilotDeviceIdentity.ps1`](Graph/Autopilot/Import-AutopilotDeviceIdentity.ps1) | Registers devices with Windows Autopilot from a hardware hash CSV. |
 | Graph / Configuration | [`Backup-IntuneConfiguration.ps1`](Graph/Configuration/Backup-IntuneConfiguration.ps1) | Read-only backup of remediations, platform scripts, configuration profiles, compliance policies and Windows update policies. |
+| Graph / Devices | [`Get-BitLockerKeyEscrowReport.ps1`](Graph/Devices/Get-BitLockerKeyEscrowReport.ps1) | For every Windows device, whether Entra ID holds its BitLocker recovery key: the authoritative check behind the BitLockerKeyEscrow package. Never reads a key. |
 | Graph / Devices | [`Get-ManagedDeviceInventory.ps1`](Graph/Devices/Get-ManagedDeviceInventory.ps1) | Every Intune managed device in the tenant, filterable, with optional CSV export. |
 | Intune / Windows / Autopilot | [`Get-AutopilotHardwareHash.ps1`](Intune/Windows/Autopilot/Get-AutopilotHardwareHash.ps1) | Collects the Autopilot hardware hash on a device during OOBE, offline, with no modules. |
 | Intune / Windows / Remediations | [`BitLockerKeyEscrow/`](Intune/Windows/Remediations/BitLockerKeyEscrow/) | Finds BitLocker recovery passwords with no evidence of backup to Entra ID, and backs them up, confirmed by Windows' own event. Never reads a password. |
