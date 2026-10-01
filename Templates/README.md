@@ -35,7 +35,7 @@ should write twice:
 | Function | Does |
 | --- | --- |
 | `Connect-GraphSession` | Reuses a session that already holds the scopes, signs in when none does, and verifies consent either way. Accepts broader scopes the script lists as alternatives. Never replaces an app-only session. Returns whether it signed in, so the script disconnects only what it opened. |
-| `Invoke-GraphRequestWithRetry` | Sends one GET or POST. Retries 429 and 5xx, and a GET that got no response at all, honouring `Retry-After`. A POST is resent only after 429 or 503, so an object is never created twice. Failures carry the HTTP status in `Exception.Data['StatusCode']`. |
+| `Invoke-GraphRequestWithRetry` | Sends one GET, POST, PATCH or DELETE. Retries 429 and 5xx, and a GET that got no response at all, honouring `Retry-After`. A POST, PATCH or DELETE is resent only after 429 or 503, so a change is never made twice. Failures carry the HTTP status in `Exception.Data['StatusCode']`. |
 | `Get-GraphCollection` | Follows `@odata.nextLink` to the last page and returns a `List`, even when empty. |
 
 The Graph SDK retries 429, 503 and 504 by itself, three times, and then throws,

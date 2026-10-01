@@ -24,7 +24,7 @@ with the payload, detection logic, and documentation that belong to it.
 | `Graph/` | Admin-side tooling run from a workstation against a tenant through Microsoft Graph, whatever workload it touches. |
 | `Graph/Autopilot/` | Registering and reporting on Windows Autopilot device identities. |
 | `Graph/Configuration/` | Backup and reporting over Intune configuration objects. |
-| `Graph/Devices/` | Managed device reporting and inventory. |
+| `Graph/Devices/` | Managed device reporting and inventory, and cleanup of stale Entra device objects. |
 | `Graph/Groups/` | Group membership changes: resolving device names to object IDs and adding them to groups. |
 | `Standalone/` | Scripts that run on their own: text and log handling, local diagnostics, one-off utilities. No Intune delivery, no Graph. |
 
@@ -55,6 +55,7 @@ If a script fits none of these, that is worth a pause rather than a new folder.
 | Graph / Configuration | [`Backup-IntuneConfiguration.ps1`](Graph/Configuration/Backup-IntuneConfiguration.ps1) | Read-only backup of remediations, platform scripts, configuration profiles, compliance policies and Windows update policies. |
 | Graph / Devices | [`Get-BitLockerKeyEscrowReport.ps1`](Graph/Devices/Get-BitLockerKeyEscrowReport.ps1) | For every Windows device, whether Entra ID holds its BitLocker recovery key: the authoritative check behind the BitLockerKeyEscrow package. Never reads a key. |
 | Graph / Devices | [`Get-ManagedDeviceInventory.ps1`](Graph/Devices/Get-ManagedDeviceInventory.ps1) | Every Intune managed device in the tenant, filterable, with optional CSV export. |
+| Graph / Devices | [`Remove-StaleEntraDevice.ps1`](Graph/Devices/Remove-StaleEntraDevice.ps1) | Finds stale Entra device objects, disables them, and deletes them after a grace period. One explicit stage per run, report by default; deletion cannot be undone. |
 | Graph / Groups | [`Add-GroupDeviceMember.ps1`](Graph/Groups/Add-GroupDeviceMember.ps1) | Resolves device names to Entra object IDs, filtered by join type and recent activity, and adds them to a group or writes the portal's bulk import CSV. |
 | Intune / Windows / Autopilot | [`Get-AutopilotHardwareHash.ps1`](Intune/Windows/Autopilot/Get-AutopilotHardwareHash.ps1) | Collects the Autopilot hardware hash on a device during OOBE, offline, with no modules. |
 | Intune / Windows / Remediations | [`BitLockerKeyEscrow/`](Intune/Windows/Remediations/BitLockerKeyEscrow/) | Finds BitLocker recovery passwords with no evidence of backup to Entra ID, and backs them up, confirmed by Windows' own event. Never reads a password. |
