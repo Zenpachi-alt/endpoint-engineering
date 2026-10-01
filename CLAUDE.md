@@ -107,6 +107,19 @@ whole region over every copy, and run Pester:
 `Templates/Script-Template.Tests.ps1` fails while any copy differs, and names
 the first line that does. Script-specific code stays outside the region.
 
+The same scripts carry the template's `#region Graph module` block, by the
+same rule, and it is the only thing that loads `Microsoft.Graph.Authentication`.
+**Never declare a module with `#Requires -Modules` in a script under
+`Graph/`**: a module PowerShell loads that way can cost the script its exit
+code, so that `pwsh -File` reports `0` whatever the script exits with. The
+main `catch` reports with
+`Write-Error -Exception $_.Exception -Message "..." -ErrorAction Continue` and
+then `exit 1`. Never give `-Message` together with `-ErrorRecord`: `Write-Error`
+fails instead of reporting. The template's tests check both, and
+`Templates/README.md` has the reasons. Where a script can fail before it signs
+in, its tests start it with `-File` in a child process and assert the exit
+code and the message, because a test of the main block never runs its `catch`.
+
 **Endpoint-side** — run by the Intune management extension on a managed device.
 Start from `Templates/Remediation/`. **Windows PowerShell 5.1 only**, because
 that is what ships with Windows; PowerShell 7 has to be deployed separately and

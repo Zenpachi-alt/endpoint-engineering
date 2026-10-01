@@ -3,7 +3,6 @@
 # Source: https://github.com/Zenpachi-alt/endpoint-engineering
 
 #Requires -Version 5.1
-#Requires -Modules @{ ModuleName = 'Microsoft.Graph.Authentication'; ModuleVersion = '2.0.0' }
 
 <#
 .SYNOPSIS
@@ -160,6 +159,28 @@ param (
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+#region Graph module
+# Identical in every script under Graph/, like the Graph helpers below. The
+# master copy is the one in Templates/Script-Template.ps1, and
+# Templates/Script-Template.Tests.ps1 fails while any copy differs.
+#
+# The module is loaded here rather than declared with '#Requires -Modules',
+# which costs a script its exit code. PowerShell loads a module declared that
+# way before the script starts, and when the module runs code of its own while
+# it loads, as this one does, a script started with -File reports 0 whatever
+# it exits with.
+try {
+    # 4>$null, or a run with -Verbose lists every command the module imports.
+    Import-Module -Name Microsoft.Graph.Authentication -MinimumVersion 2.0.0 -ErrorAction Stop 4>$null
+}
+catch {
+    Write-Error -Exception $_.Exception -ErrorAction Continue -Message (
+        "Microsoft.Graph.Authentication 2.0.0 or later could not be loaded: $($_.Exception.Message) " +
+        'If it is not installed, run: Install-Module -Name Microsoft.Graph.Authentication -Scope CurrentUser')
+    exit 1
+}
+#endregion Graph module
 
 # No broader scope covers Autopilot registration, so nothing else is accepted.
 $RequiredScopes = [ordered]@{
@@ -1071,7 +1092,11 @@ try {
     exit 0
 }
 catch {
-    Write-Error -Message "Script failed: $($_.Exception.Message)" -ErrorRecord $_ -ErrorAction Continue
+    # -Exception, not -ErrorRecord: Write-Error takes -Message with the first
+    # and not with the second, and would fail here instead of reporting.
+    # -ErrorAction Continue, or the preference set above would stop the script
+    # at this line, before exit sets the code.
+    Write-Error -Exception $_.Exception -Message "Script failed: $($_.Exception.Message)" -ErrorAction Continue
     exit 1
 }
 finally {

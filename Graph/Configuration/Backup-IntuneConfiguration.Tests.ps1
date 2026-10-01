@@ -23,6 +23,11 @@
     documentation; only a run against a real tenant shows that. The other four
     categories are not covered yet.
 
+    The script is also started as a file, in a child process, for the exit
+    code and the message of a run that fails before it signs in. That gets
+    past the script's module check, so it is skipped where
+    Microsoft.Graph.Authentication is not installed.
+
     Identifier-shaped values are generated at run time, so this file passes
     Tools/Test-SensitiveContent.ps1 like any other.
 
@@ -34,13 +39,23 @@
     Graph scopes  : None. Nothing reaches a tenant.
     Admin consent : Not applicable.
     Licensing     : None.
-    Modules       : Pester 5.5.0 or later. Microsoft.Graph.Authentication is
-                    not needed: loading functions from the syntax tree does
-                    not evaluate the script's #Requires.
+    Modules       : Pester 5.5.0 or later.
+                    Microsoft.Graph.Authentication 2.0.0 or later, optional,
+                    for the test of the script run as a file. The other tests
+                    do not need it: loading functions from the syntax tree
+                    does not run the script's module check.
 #>
+
+BeforeDiscovery {
+    # The script loads the module before anything else, so it gets as far as
+    # its own checks only where the module is installed.
+    $script:ModuleAvailable = [bool](Get-Module -ListAvailable -Name Microsoft.Graph.Authentication |
+            Where-Object { $_.Version -ge [version]'2.0.0' })
+}
 
 BeforeAll {
     $scriptPath = Join-Path -Path $PSScriptRoot -ChildPath 'Backup-IntuneConfiguration.ps1'
+    $script:ScriptPath = $scriptPath
 
     # Every top-level function of the script, without the main block.
     $parseErrors = $null
@@ -564,5 +579,26 @@ Describe 'The WindowsUpdates category' {
             $run.Rows | Should -HaveCount 1
             $run.Rows[0].DisplayName | Should -Be 'Expedite September'
         }
+    }
+}
+
+Describe 'The script, run as a file' -Skip:(-not $script:ModuleAvailable) {
+
+    It 'exits 1 and gives the reason when the output folder cannot be created' {
+        # Started with -File in a child process, as a scheduled task would,
+        # so that its exit ends that process and not the test run. A folder
+        # cannot be created below a file, and the script finds that out
+        # before it signs in, so nothing reaches Graph. The text comes back
+        # without white space, because the host wraps long errors.
+        $file = Join-Path -Path $TestDrive -ChildPath 'not-a-folder.txt'
+        Set-Content -LiteralPath $file -Value 'A file, where the backup was told to put a folder.'
+
+        $output = @(& (Get-Process -Id $PID).Path -NoProfile -NonInteractive -File $script:ScriptPath `
+                -OutputPath (Join-Path -Path $file -ChildPath 'Backups') 2>&1)
+        $exitCode = $LASTEXITCODE
+        $text = (@($output | ForEach-Object { [string]$_ }) -join '') -replace '\s', ''
+
+        $exitCode | Should -Be 1
+        $text | Should -BeLike '*FATAL:*'
     }
 }

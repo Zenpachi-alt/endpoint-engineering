@@ -211,6 +211,9 @@ still run. The exit code says which happened:
 | 1 | Fatal: the output folder could not be created, or the Graph connection failed. |
 | 2 | Finished, but at least one object or category listing failed. |
 
+The code is the same however the script is started: `$LASTEXITCODE` in a
+session, or what `pwsh -File` returns to a scheduled task.
+
 ### Sessions
 
 A Graph session that already holds the scopes the run needs is reused and left
@@ -238,6 +241,11 @@ Invoke-Pester -Path .\Graph\Configuration -Output Detailed
 The tests load the script's functions without running its main block, replace
 its two Graph readers with a stand-in tenant held in memory, and write the
 backup to Pester's `TestDrive`. They need no tenant and no Graph module.
+
+One test starts the script with `-File` in a child process, told to write
+below a file, and asserts the fatal message and exit code `1`. It does need
+the Graph module, and is skipped where that is not installed. Exit code `2`
+takes a tenant to produce, and is not tested.
 
 They cover the Windows updates category, the timestamp helpers and the Autopatch
 note: which files are written, what the index says, how a failure on one policy

@@ -19,6 +19,10 @@
     names the wrong devices fails here. Nothing reaches Graph and no module is
     needed.
 
+    The script is also started as a file, in a child process, for its exit
+    code and its message. That gets past the script's module check, so it is
+    skipped where Microsoft.Graph.Authentication is not installed.
+
     Identifier-shaped values are built at run time, so this file passes
     Tools/Test-SensitiveContent.ps1 like any other.
 
@@ -31,10 +35,21 @@
     Admin consent : Not applicable.
     Licensing     : None.
     Modules       : Pester 5.5.0 or later.
+                    Microsoft.Graph.Authentication 2.0.0 or later, optional,
+                    for the test of the script run as a file.
 #>
+
+BeforeDiscovery {
+    # The script loads the module before anything else, so it gets as far as
+    # its own checks only where the module is installed for the PowerShell
+    # that runs the tests.
+    $script:ModuleAvailable = [bool](Get-Module -ListAvailable -Name Microsoft.Graph.Authentication |
+            Where-Object { $_.Version -ge [version]'2.0.0' })
+}
 
 BeforeAll {
     $scriptPath = Join-Path -Path $PSScriptRoot -ChildPath 'Add-GroupDeviceMember.ps1'
+    $script:ScriptPath = $scriptPath
 
     # Every top-level function of the script, without the main block.
     $parseErrors = $null
@@ -846,5 +861,22 @@ Describe 'The main block' {
             $run.Failure | Should -Be '2 device(s) were not added to the group. See Membership and MembershipDetail on the returned records.'
             @($run.Files | Where-Object Name -NotLike '*-Import.csv') | Should -HaveCount 1
         }
+    }
+}
+
+Describe 'The script, run as a file' -Skip:(-not $script:ModuleAvailable) {
+
+    It 'exits 1 and gives the reason, not an error of its own, when it refuses a request' {
+        # Started with -File in a child process, as a scheduled task would,
+        # so that its exit ends that process and not the test run. The
+        # request is refused before the script signs in, so nothing reaches
+        # Graph. The text comes back without white space, because the host
+        # wraps long errors.
+        $output = @(& (Get-Process -Id $PID).Path -NoProfile -NonInteractive -File $script:ScriptPath -DeviceName ' ' 2>&1)
+        $exitCode = $LASTEXITCODE
+        $text = (@($output | ForEach-Object { [string]$_ }) -join '') -replace '\s', ''
+
+        $exitCode | Should -Be 1
+        $text | Should -BeLike '*Scriptfailed:-DeviceNameholdsnodevicenames.*'
     }
 }

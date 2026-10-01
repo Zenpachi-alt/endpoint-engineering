@@ -7,16 +7,26 @@
 
 <#
 .SYNOPSIS
-    Pester tests for the Graph helpers region of Script-Template.ps1, and the
-    check that every copy of that region still matches it.
+    Pester tests for the Graph helpers region of Script-Template.ps1, the
+    check that every copy of the template's regions still matches them, and
+    the checks that a script reports a failure and keeps its exit code.
 
 .DESCRIPTION
-    Three parts.
+    Four parts.
 
     Copies: every script under Graph/, and any other script that carries the
-    region, must hold a copy identical to the template's. This is what keeps
-    one implementation across scripts that each run on their own. A failure
-    names the file and the first line that differs.
+    Graph helpers region, must hold copies of the Graph module and Graph
+    helpers regions identical to the template's. This is what keeps one
+    implementation across scripts that each run on their own. A failure names
+    the file and the first line that differs.
+
+    Failure reporting: none of those scripts, nor the template, declares a
+    module with #Requires, which costs a script its exit code when it is
+    started with -File, and every Write-Error in them is given parameters
+    that go together, so that a catch block reports the failure and not an
+    error of its own. Where Microsoft.Graph.Authentication is not installed,
+    the template is also started as a file, and must exit 1 and say what to
+    install. The scripts' own tests start them as files where it is installed.
 
     Behaviour: the helpers run against stand-ins for the Microsoft Graph SDK
     cmdlets, so retry, paging and scope checks are tested without the module
@@ -69,22 +79,25 @@ BeforeDiscovery {
             }
     )
 
-    $script:SdkAvailable = $PSVersionTable.PSEdition -eq 'Core' -and
-        [bool](Get-Module -ListAvailable -Name Microsoft.Graph.Authentication |
-                Where-Object { $_.Version -ge [version]'2.0.0' })
+    # The template and every copy: what the failure reporting checks cover.
+    $script:Scripts = @(@{ Path = $templatePath; Name = 'Templates/Script-Template.ps1' }) + $script:Copies
+
+    $script:ModuleAvailable = [bool](Get-Module -ListAvailable -Name Microsoft.Graph.Authentication |
+            Where-Object { $_.Version -ge [version]'2.0.0' })
+    $script:SdkAvailable = $PSVersionTable.PSEdition -eq 'Core' -and $script:ModuleAvailable
 }
 
 BeforeAll {
     $script:TemplatePath = Join-Path -Path $PSScriptRoot -ChildPath 'Script-Template.ps1'
 
-    function Get-HelperRegion {
-        # The lines from '#region Graph helpers' to '#endregion Graph helpers',
-        # or $null unless the file holds exactly one such block.
-        param ([string]$Path)
+    function Get-CopiedRegion {
+        # The lines from '#region <Name>' to '#endregion <Name>', or $null
+        # unless the file holds exactly one such block.
+        param ([string]$Path, [string]$Name = 'Graph helpers')
 
         $lines = @((Get-Content -LiteralPath $Path -Raw) -split '\r?\n')
-        $starts = @(for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -ceq '#region Graph helpers') { $i } })
-        $ends = @(for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -ceq '#endregion Graph helpers') { $i } })
+        $starts = @(for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -ceq "#region $Name") { $i } })
+        $ends = @(for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -ceq "#endregion $Name") { $i } })
 
         if ($starts.Count -ne 1 -or $ends.Count -ne 1 -or $ends[0] -le $starts[0]) { return $null }
 
@@ -92,21 +105,24 @@ BeforeAll {
     }
 }
 
-Describe 'Copies of the Graph helpers' {
+Describe 'Copies of the <Region> region' -ForEach @(
+    @{ Region = 'Graph module' }
+    @{ Region = 'Graph helpers' }
+) {
 
     BeforeAll {
-        $script:MasterRegion = Get-HelperRegion -Path $script:TemplatePath
+        $script:MasterRegion = Get-CopiedRegion -Path $script:TemplatePath -Name $Region
     }
 
-    It 'the template holds exactly one Graph helpers region' {
+    It 'the template holds exactly one such region' {
         @($script:MasterRegion).Count | Should -BeGreaterThan 2
     }
 
     It '<Name> matches the template' -ForEach $script:Copies {
-        $copy = Get-HelperRegion -Path $Path
+        $copy = Get-CopiedRegion -Path $Path -Name $Region
 
         if ($null -eq $copy) {
-            throw "$Name has no single '#region Graph helpers' ... '#endregion Graph helpers' block. Copy the region from Templates/Script-Template.ps1."
+            throw "$Name has no single '#region $Region' ... '#endregion $Region' block. Copy the region from Templates/Script-Template.ps1."
         }
 
         $length = [Math]::Max($copy.Count, $script:MasterRegion.Count)
@@ -115,10 +131,70 @@ Describe 'Copies of the Graph helpers' {
             $actual = if ($i -lt $copy.Count) { $copy[$i] } else { '<end of region>' }
 
             if ($actual -cne $expected) {
-                throw ("{0} differs from the template at line {1} of the region.`n  template: {2}`n  copy:     {3}`n" +
-                    "Paste the region from Templates/Script-Template.ps1 over this copy.") -f $Name, ($i + 1), $expected, $actual
+                throw ("{0} differs from the template at line {1} of the {4} region.`n  template: {2}`n  copy:     {3}`n" +
+                    "Paste the region from Templates/Script-Template.ps1 over this copy.") -f $Name, ($i + 1), $expected, $actual, $Region
             }
         }
+    }
+}
+
+Describe 'How a Graph script reports failure' {
+
+    BeforeAll {
+        function Get-SyntaxTree {
+            param ([string]$Path)
+
+            $parseErrors = $null
+            $syntaxTree = [System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$null, [ref]$parseErrors)
+            if ($parseErrors) { throw "$Path does not parse: $($parseErrors[0].Message)" }
+            $syntaxTree
+        }
+    }
+
+    It '<Name> declares no module with #Requires, which would cost it its exit code under -File' -ForEach $script:Scripts {
+        $requirements = (Get-SyntaxTree -Path $Path).ScriptRequirements
+        $declared = @(if ($requirements) { $requirements.RequiredModules | ForEach-Object { $_.Name } })
+
+        $declared | Should -HaveCount 0 -Because 'the Graph module region loads the module instead, and says why'
+    }
+
+    It '<Name> gives every Write-Error parameters that go together' -ForEach $script:Scripts {
+        # -Message with -ErrorRecord is the mistake this guards against: they
+        # belong to different parameter sets, so Write-Error fails instead of
+        # reporting, and only ever inside a catch block that a test of the
+        # main block does not reach.
+        $calls = @((Get-SyntaxTree -Path $Path).FindAll({
+                    param ($node)
+                    $node -is [System.Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Write-Error'
+                }, $true))
+        $calls.Count | Should -BeGreaterThan 0
+
+        $refused = @(
+            foreach ($call in $calls) {
+                $binding = [System.Management.Automation.Language.StaticParameterBinder]::BindCommand($call, $true)
+                foreach ($problem in $binding.BindingExceptions.Values) {
+                    "line $($call.Extent.StartLineNumber): $($problem.BindingException.Message)"
+                }
+            }
+        )
+
+        $refused | Should -HaveCount 0
+    }
+}
+
+Describe 'The template, run as a file where the module is not installed' -Skip:$script:ModuleAvailable {
+
+    It 'exits 1 and says what to install' {
+        # Started with -File, as a scheduled task would start it. The module
+        # is loaded before anything else, so nothing here can sign in. The
+        # text comes back without white space, because the host wraps errors.
+        $output = @(& (Get-Process -Id $PID).Path -NoProfile -NonInteractive -File $script:TemplatePath `
+                -TenantId 'contoso.onmicrosoft.com' -GroupId ([guid]::Empty.ToString()) 2>&1)
+        $exitCode = $LASTEXITCODE
+        $text = (@($output | ForEach-Object { [string]$_ }) -join '') -replace '\s', ''
+
+        $exitCode | Should -Be 1
+        $text | Should -BeLike '*Microsoft.Graph.Authentication2.0.0orlatercouldnotbeloaded*Install-Module-NameMicrosoft.Graph.Authentication*'
     }
 }
 
@@ -238,7 +314,7 @@ Describe 'Graph helpers' {
             'DeviceManagementManagedDevices.Read.All' = @('DeviceManagementManagedDevices.ReadWrite.All')
         }
 
-        . ([scriptblock]::Create(((Get-HelperRegion -Path $script:TemplatePath) -join [Environment]::NewLine)))
+        . ([scriptblock]::Create(((Get-CopiedRegion -Path $script:TemplatePath) -join [Environment]::NewLine)))
 
         Mock Start-Sleep { $script:Sleeps.Add($Seconds) }
     }

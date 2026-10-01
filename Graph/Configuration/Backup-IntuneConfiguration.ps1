@@ -3,7 +3,6 @@
 # Source: https://github.com/Zenpachi-alt/endpoint-engineering
 
 #Requires -Version 7.2
-#Requires -Modules @{ ModuleName = 'Microsoft.Graph.Authentication'; ModuleVersion = '2.0.0' }
 
 <#
 .SYNOPSIS
@@ -245,6 +244,28 @@ param (
 
 $ErrorActionPreference = 'Stop'
 $InformationPreference = 'Continue'
+
+#region Graph module
+# Identical in every script under Graph/, like the Graph helpers below. The
+# master copy is the one in Templates/Script-Template.ps1, and
+# Templates/Script-Template.Tests.ps1 fails while any copy differs.
+#
+# The module is loaded here rather than declared with '#Requires -Modules',
+# which costs a script its exit code. PowerShell loads a module declared that
+# way before the script starts, and when the module runs code of its own while
+# it loads, as this one does, a script started with -File reports 0 whatever
+# it exits with.
+try {
+    # 4>$null, or a run with -Verbose lists every command the module imports.
+    Import-Module -Name Microsoft.Graph.Authentication -MinimumVersion 2.0.0 -ErrorAction Stop 4>$null
+}
+catch {
+    Write-Error -Exception $_.Exception -ErrorAction Continue -Message (
+        "Microsoft.Graph.Authentication 2.0.0 or later could not be loaded: $($_.Exception.Message) " +
+        'If it is not installed, run: Install-Module -Name Microsoft.Graph.Authentication -Scope CurrentUser')
+    exit 1
+}
+#endregion Graph module
 
 $script:GraphBeta      = 'https://graph.microsoft.com/beta'
 $script:GraphV1        = 'https://graph.microsoft.com/v1.0'
