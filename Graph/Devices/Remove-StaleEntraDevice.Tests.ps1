@@ -1705,6 +1705,11 @@ Describe 'The script, run as a file' {
             # because the host wraps long errors.
             param ([string[]]$Argument)
 
+            # Continue, not the caller's Stop: Windows PowerShell 5.1 turns the
+            # child's error output into a terminating error under Stop, which
+            # is what the Windows PowerShell step in CI sets, and the test would
+            # end there instead of reading the exit code.
+            $ErrorActionPreference = 'Continue'
             $output = @(& (Get-Process -Id $PID).Path -NoProfile -NonInteractive -File $script:ScriptPath @Argument 2>&1)
             [pscustomobject]@{
                 ExitCode = $LASTEXITCODE
