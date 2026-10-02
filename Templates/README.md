@@ -5,8 +5,8 @@ copied into the domain folder it belongs to and renamed after the thing it does.
 
 | Template | Use for |
 | --- | --- |
-| `Script-Template.ps1` | Admin-side tooling run by a person against a tenant: Graph queries, bulk operations, reporting. Holds the master copy of the Graph helpers. |
-| `Script-Template.Tests.ps1` | Tests for the Graph helpers, and the check that every copy under `Graph/` matches the template's. |
+| `Script-Template.ps1` | Admin-side tooling run by a person against a tenant: Graph queries, bulk operations, reporting. Holds the master copies of the Graph module region and the Graph helpers. |
+| `Script-Template.Tests.ps1` | Tests for the Graph helpers, the check that every copy of both regions under `Graph/` matches the template's, and the checks that a script reports a failure and keeps its exit code. |
 | `Remediation/` | Endpoint-side script pairs run by the Intune management extension on a device, the optional TimeGuard block for packages with heavy checks, and the test harness every package's tests carry. |
 
 ## Which one to start from
@@ -56,6 +56,43 @@ Windows PowerShell 5.1 and PowerShell 7, and — where
 local server that throttles and pages. CI runs them under both, and installs
 the module for the PowerShell 7 run, so the real-SDK tests always run there.
 
+## Failure and exit codes
+
+A script built from `Script-Template.ps1` exits `0` when it succeeds and `1`
+when it fails, with the reason on the error stream. The code is the same
+however the script is started: from a session, where the caller reads
+`$LASTEXITCODE`, or with `pwsh -File`, as a scheduled task starts it. Two
+things keep that true, and `Script-Template.Tests.ps1` checks both in the
+template and in every script under `Graph/`.
+
+**The script loads the Graph module itself.** `Script-Template.ps1` carries a
+`#region Graph module` block that imports `Microsoft.Graph.Authentication`, or
+says what to install and exits `1`. Every script under `Graph/` carries an
+identical copy, kept identical by the same test as the helpers. No script
+declares the module with `#Requires -Modules`. PowerShell loads a module
+declared that way before the script starts, and when the module runs code of
+its own while it loads, as the Graph module does, a script started with `-File`
+reports `0` whatever it exits with. That was seen on Windows PowerShell 5.1
+and PowerShell 7.6, and only with `-File`: read from a session, the code was
+right.
+
+**The main `catch` reports, then exits.** It is
+`Write-Error -Exception $_.Exception -Message "..." -ErrorAction Continue`
+followed by `exit 1`. `-Message` cannot be given with `-ErrorRecord`: the two
+belong to different parameter sets, so `Write-Error` fails with an error of
+its own and the reason is never shown. Without `-ErrorAction Continue`, the
+script's `$ErrorActionPreference = 'Stop'` stops it at that line, and `exit`
+never sets the code.
+
+A script may exit with other codes for outcomes a caller should tell apart,
+and documents them in its README, as `Graph/Configuration` does.
+
+Neither mistake shows in the tests of a script's main block, which run the
+body of its `try` and never its `catch`. So where a script can fail before it
+signs in, its tests also start it as a file in a child process and assert the
+exit code and the message. Those tests need the module, and are skipped where
+it is not installed for the PowerShell that runs them.
+
 ## Declaring the PowerShell version
 
 `#Requires -Version` is what CI reads. A script declaring `5.1` is checked for
@@ -72,7 +109,9 @@ on a workstation.
   consent, licensing, and modules.
 - No real tenant identifiers anywhere — including examples, comments, and sample
   output. Run `Tools/Test-SensitiveContent.ps1` if you are unsure.
-- Every failure path produces an actionable message and a non-zero exit code.
-- A script under `Graph/` keeps the Graph helpers region exactly as the template
-  has it. Code of its own goes outside the region.
+- Every failure path produces an actionable message and a non-zero exit code,
+  and the main `catch` keeps the template's `Write-Error` and `exit 1`.
+- A script under `Graph/` keeps the Graph module and Graph helpers regions
+  exactly as the template has them, and declares no module with `#Requires`.
+  Code of its own goes outside the regions.
 - The folder the script lives in has its own `README.md`.

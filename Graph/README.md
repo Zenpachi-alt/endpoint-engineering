@@ -19,6 +19,12 @@ a device, or that run on one, belong under `Intune/` instead.
   so it still runs when copied out on its own. A test fails while any copy
   differs from the template's; see [`Templates/README.md`](../Templates/README.md).
   The conventions below are what those helpers implement.
+- **An exit code that means the same however the script is started.** `0` for
+  success and non-zero for failure, read as `$LASTEXITCODE` in a session or
+  returned by `pwsh -File` to a scheduled task. Each script loads the Graph
+  module with the template's `#region Graph module` block, also unchanged, and
+  never with `#Requires -Modules`, which costs a script its exit code under
+  `-File`. [`Templates/README.md`](../Templates/README.md) has the detail.
 - **Read-only unless stated.** Anything that writes gates the change behind
   `ShouldProcess` and defaults to report-only.
 - **Narrowest scopes.** Request only what the script calls, and verify the

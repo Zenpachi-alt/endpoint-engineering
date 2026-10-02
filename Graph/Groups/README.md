@@ -127,7 +127,8 @@ Run with `-WhatIf` first.
 
 The script exits `1` when any device is `Failed` or `NotAttempted`, after
 returning every record and writing the report. Names that did not resolve do
-not change the exit code. They are data to act on, not a failed run.
+not change the exit code. They are data to act on, not a failed run. The code
+is the same in a session, as `$LASTEXITCODE`, and from `pwsh -File`.
 
 ### Output files
 
@@ -159,6 +160,8 @@ that asks for the wrong names fails. The tests cover:
 - the add requests, `-WhatIf`, a retried add that had already landed, and the
   403 stop
 - both files and the exit path
+- the script started with `-File` in a child process, for its exit code and
+  its message; skipped where `Microsoft.Graph.Authentication` is not installed
 
 The tests run under Windows PowerShell 5.1 and PowerShell 7. What they cannot
 show is a real tenant's answers.
