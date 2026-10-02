@@ -403,9 +403,10 @@ function Invoke-GraphRequestWithRetry {
             process-wide: do not call this from parallel runspaces.
 
             GET is retried on 429, 500, 502, 503 and 504, and when no response
-            arrives at all. POST is retried only on 429 and 503, the answers
-            that mean the service did not act on the request: retrying a POST
-            after any other failure could create the same object twice.
+            arrives at all. POST, PATCH and DELETE are retried only on 429 and
+            503, the answers that mean the service did not act on the request:
+            retrying after any other failure could repeat a change that had
+            already landed.
 
             A request that still fails throws. Data['StatusCode'] on the
             exception holds the last HTTP status, or 0 when nothing came back.
@@ -421,7 +422,7 @@ function Invoke-GraphRequestWithRetry {
         [string]$Uri,
 
         [Parameter()]
-        [ValidateSet('GET', 'POST')]
+        [ValidateSet('GET', 'POST', 'PATCH', 'DELETE')]
         [string]$Method = 'GET',
 
         [Parameter()]

@@ -421,37 +421,65 @@ Describe 'Graph helpers' {
             $script:Notices[0] | Should -Match '^No response from GET'
         }
 
-        It 'never resends a POST that got no response, because it may have landed' {
+        It 'never resends a <Method> that got no response, because it may have landed' -ForEach @(
+            @{ Method = 'POST' }
+            @{ Method = 'PATCH' }
+            @{ Method = 'DELETE' }
+        ) {
             $script:Responses.Enqueue([System.Net.Http.HttpRequestException]::new('The response ended prematurely'))
 
-            $failure = { Invoke-GraphRequestWithRetry -Uri $script:Uri -Method POST -Body @{ serialNumber = 'x' } } |
+            $failure = { Invoke-GraphRequestWithRetry -Uri $script:Uri -Method $Method -Body @{ serialNumber = 'x' } } |
                 Should -Throw -PassThru
 
             $failure.Exception.Data['StatusCode'] | Should -Be 0
             $failure.Exception.InnerException | Should -BeOfType [System.Net.Http.HttpRequestException]
             $script:Requests.Count | Should -Be 1
+            $script:Requests[0].Method | Should -Be $Method
         }
 
-        It 'resends a POST after HTTP <Status>: <Resent>' -ForEach @(
-            @{ Status = 429; Resent = $true }
-            @{ Status = 503; Resent = $true }
-            @{ Status = 500; Resent = $false }
-            @{ Status = 502; Resent = $false }
-            @{ Status = 504; Resent = $false }
+        It 'resends a <Method> after HTTP <Status>: <Resent>' -ForEach @(
+            foreach ($method in 'POST', 'PATCH', 'DELETE') {
+                @{ Method = $method; Status = 429; Resent = $true }
+                @{ Method = $method; Status = 503; Resent = $true }
+                @{ Method = $method; Status = 500; Resent = $false }
+                @{ Method = $method; Status = 502; Resent = $false }
+                @{ Method = $method; Status = 504; Resent = $false }
+            }
         ) {
             $script:Responses.Enqueue((Get-StandInResponse -Status $Status -RetryAfter '1'))
             $script:Responses.Enqueue((Get-StandInResponse -Status 201 -Content '{"id":"new"}'))
 
-            $call = { Invoke-GraphRequestWithRetry -Uri $script:Uri -Method POST -Body @{ serialNumber = 'x' } -OnRetry { param ($Message) $script:Notices.Add($Message) } }
+            $call = { Invoke-GraphRequestWithRetry -Uri $script:Uri -Method $Method -Body @{ serialNumber = 'x' } -OnRetry { param ($Message) $script:Notices.Add($Message) } }
 
             if ($Resent) {
                 (& $call).id | Should -Be 'new'
                 $script:Requests.Count | Should -Be 2
             }
             else {
-                $call | Should -Throw "*HTTP $Status from POST*"
+                $call | Should -Throw "*HTTP $Status from $Method*"
                 $script:Requests.Count | Should -Be 1
             }
+        }
+
+        It 'sends a PATCH with its body and a DELETE without one, and returns nothing for an empty 204' {
+            $script:Responses.Enqueue((Get-StandInResponse -Status 204 -Content ''))
+            $script:Responses.Enqueue((Get-StandInResponse -Status 204 -Content ''))
+
+            $patched = Invoke-GraphRequestWithRetry -Uri $script:Uri -Method PATCH -Body @{ accountEnabled = $false }
+            $deleted = Invoke-GraphRequestWithRetry -Uri $script:Uri -Method DELETE
+
+            $patched | Should -BeNullOrEmpty
+            $deleted | Should -BeNullOrEmpty
+            $script:Requests[0].Method | Should -Be 'PATCH'
+            $script:Requests[0].Body['accountEnabled'] | Should -BeFalse
+            $script:Requests[1].Method | Should -Be 'DELETE'
+            $script:Requests[1].Body | Should -BeNullOrEmpty
+        }
+
+        It 'refuses a method it has no retry rule for' {
+            { Invoke-GraphRequestWithRetry -Uri $script:Uri -Method PUT } | Should -Throw
+
+            $script:Requests.Count | Should -Be 0
         }
 
         It 'fails at once on an error that is not about the network, such as not being signed in' {
@@ -731,6 +759,14 @@ try {
                     $body = '{"value":[{"id":"a"},{"id":"b"}],"@odata.nextLink":"http://localhost:' + $port + '/v1.0/page2"}'
                 }
                 '/v1.0/page2' { $response.StatusCode = 200; $body = '{"value":[{"id":"c"}]}' }
+                '/v1.0/changed' {
+                    # Answers a write as Graph does, with 204 and no body, and
+                    # keeps what arrived under the method that sent it.
+                    $reader = [System.IO.StreamReader]::new($context.Request.InputStream)
+                    $hits[$context.Request.HttpMethod] = $reader.ReadToEnd()
+                    $response.StatusCode = 204
+                    $body = ''
+                }
                 default { $response.StatusCode = 404; $body = '{"error":{"code":"NotFound","message":"no such path"}}' }
             }
             $bytes = [System.Text.Encoding]::UTF8.GetBytes($body)
@@ -773,6 +809,14 @@ try {
         $result.FlakyHits = [int]$hits['/v1.0/flaky']
 
         $result.PagedCount = (Get-GraphCollection -Uri "$base/page1" -OnRetry $onRetry).Count
+
+        $patched = Invoke-GraphRequestWithRetry -Uri "$base/changed" -Method PATCH -Body @{ accountEnabled = $false } -OnRetry $onRetry
+        $deleted = Invoke-GraphRequestWithRetry -Uri "$base/changed" -Method DELETE -OnRetry $onRetry
+        $result.PatchReturnedNothing = $null -eq $patched
+        $result.PatchBody = [string]$hits['PATCH']
+        $result.DeleteReturnedNothing = $null -eq $deleted
+        $result.DeleteArrived = $hits.ContainsKey('DELETE')
+
         $result.MaxRetryAfter = (Get-MgRequestContext).MaxRetry
 
         $null = Disconnect-MgGraph
@@ -817,6 +861,16 @@ catch {
 
     It 'follows @odata.nextLink through the SDK' {
         $script:Live.PagedCount | Should -Be 3
+    }
+
+    It 'sends a PATCH with its body as JSON, and takes the empty 204 as success' {
+        ($script:Live.PatchBody | ConvertFrom-Json).accountEnabled | Should -BeFalse
+        $script:Live.PatchReturnedNothing | Should -BeTrue
+    }
+
+    It 'sends a DELETE, and takes the empty 204 as success' {
+        $script:Live.DeleteArrived | Should -BeTrue
+        $script:Live.DeleteReturnedNothing | Should -BeTrue
     }
 
     It 'leaves the SDK retry setting as it found it' {
