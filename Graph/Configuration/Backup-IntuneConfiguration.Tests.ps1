@@ -593,6 +593,11 @@ Describe 'The script, run as a file' -Skip:(-not $script:ModuleAvailable) {
         $file = Join-Path -Path $TestDrive -ChildPath 'not-a-folder.txt'
         Set-Content -LiteralPath $file -Value 'A file, where the backup was told to put a folder.'
 
+        # Continue, not the caller's Stop: Windows PowerShell 5.1 turns the
+        # child's error output into a terminating error under Stop, which
+        # is what the Windows PowerShell step in CI sets, and the test would
+        # end there instead of reading the exit code.
+        $ErrorActionPreference = 'Continue'
         $output = @(& (Get-Process -Id $PID).Path -NoProfile -NonInteractive -File $script:ScriptPath `
                 -OutputPath (Join-Path -Path $file -ChildPath 'Backups') 2>&1)
         $exitCode = $LASTEXITCODE

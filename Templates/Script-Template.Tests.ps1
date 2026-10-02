@@ -188,6 +188,11 @@ Describe 'The template, run as a file where the module is not installed' -Skip:$
         # Started with -File, as a scheduled task would start it. The module
         # is loaded before anything else, so nothing here can sign in. The
         # text comes back without white space, because the host wraps errors.
+        # Continue, not the caller's Stop: Windows PowerShell 5.1 turns the
+        # child's error output into a terminating error under Stop, which
+        # is what the Windows PowerShell step in CI sets, and the test would
+        # end there instead of reading the exit code.
+        $ErrorActionPreference = 'Continue'
         $output = @(& (Get-Process -Id $PID).Path -NoProfile -NonInteractive -File $script:TemplatePath `
                 -TenantId 'contoso.onmicrosoft.com' -GroupId ([guid]::Empty.ToString()) 2>&1)
         $exitCode = $LASTEXITCODE
