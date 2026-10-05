@@ -7,16 +7,26 @@
 
 <#
 .SYNOPSIS
-    Pester tests for the Graph helpers region of Script-Template.ps1, and the
-    check that every copy of that region still matches it.
+    Pester tests for the Graph helpers region of Script-Template.ps1, the
+    check that every copy of the template's regions still matches them, and
+    the checks that a script reports a failure and keeps its exit code.
 
 .DESCRIPTION
-    Three parts.
+    Four parts.
 
     Copies: every script under Graph/, and any other script that carries the
-    region, must hold a copy identical to the template's. This is what keeps
-    one implementation across scripts that each run on their own. A failure
-    names the file and the first line that differs.
+    Graph helpers region, must hold copies of the Graph module and Graph
+    helpers regions identical to the template's. This is what keeps one
+    implementation across scripts that each run on their own. A failure names
+    the file and the first line that differs.
+
+    Failure reporting: none of those scripts, nor the template, declares a
+    module with #Requires, which costs a script its exit code when it is
+    started with -File, and every Write-Error in them is given parameters
+    that go together, so that a catch block reports the failure and not an
+    error of its own. Where Microsoft.Graph.Authentication is not installed,
+    the template is also started as a file, and must exit 1 and say what to
+    install. The scripts' own tests start them as files where it is installed.
 
     Behaviour: the helpers run against stand-ins for the Microsoft Graph SDK
     cmdlets, so retry, paging and scope checks are tested without the module
@@ -69,22 +79,25 @@ BeforeDiscovery {
             }
     )
 
-    $script:SdkAvailable = $PSVersionTable.PSEdition -eq 'Core' -and
-        [bool](Get-Module -ListAvailable -Name Microsoft.Graph.Authentication |
-                Where-Object { $_.Version -ge [version]'2.0.0' })
+    # The template and every copy: what the failure reporting checks cover.
+    $script:Scripts = @(@{ Path = $templatePath; Name = 'Templates/Script-Template.ps1' }) + $script:Copies
+
+    $script:ModuleAvailable = [bool](Get-Module -ListAvailable -Name Microsoft.Graph.Authentication |
+            Where-Object { $_.Version -ge [version]'2.0.0' })
+    $script:SdkAvailable = $PSVersionTable.PSEdition -eq 'Core' -and $script:ModuleAvailable
 }
 
 BeforeAll {
     $script:TemplatePath = Join-Path -Path $PSScriptRoot -ChildPath 'Script-Template.ps1'
 
-    function Get-HelperRegion {
-        # The lines from '#region Graph helpers' to '#endregion Graph helpers',
-        # or $null unless the file holds exactly one such block.
-        param ([string]$Path)
+    function Get-CopiedRegion {
+        # The lines from '#region <Name>' to '#endregion <Name>', or $null
+        # unless the file holds exactly one such block.
+        param ([string]$Path, [string]$Name = 'Graph helpers')
 
         $lines = @((Get-Content -LiteralPath $Path -Raw) -split '\r?\n')
-        $starts = @(for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -ceq '#region Graph helpers') { $i } })
-        $ends = @(for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -ceq '#endregion Graph helpers') { $i } })
+        $starts = @(for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -ceq "#region $Name") { $i } })
+        $ends = @(for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -ceq "#endregion $Name") { $i } })
 
         if ($starts.Count -ne 1 -or $ends.Count -ne 1 -or $ends[0] -le $starts[0]) { return $null }
 
@@ -92,21 +105,24 @@ BeforeAll {
     }
 }
 
-Describe 'Copies of the Graph helpers' {
+Describe 'Copies of the <Region> region' -ForEach @(
+    @{ Region = 'Graph module' }
+    @{ Region = 'Graph helpers' }
+) {
 
     BeforeAll {
-        $script:MasterRegion = Get-HelperRegion -Path $script:TemplatePath
+        $script:MasterRegion = Get-CopiedRegion -Path $script:TemplatePath -Name $Region
     }
 
-    It 'the template holds exactly one Graph helpers region' {
+    It 'the template holds exactly one such region' {
         @($script:MasterRegion).Count | Should -BeGreaterThan 2
     }
 
     It '<Name> matches the template' -ForEach $script:Copies {
-        $copy = Get-HelperRegion -Path $Path
+        $copy = Get-CopiedRegion -Path $Path -Name $Region
 
         if ($null -eq $copy) {
-            throw "$Name has no single '#region Graph helpers' ... '#endregion Graph helpers' block. Copy the region from Templates/Script-Template.ps1."
+            throw "$Name has no single '#region $Region' ... '#endregion $Region' block. Copy the region from Templates/Script-Template.ps1."
         }
 
         $length = [Math]::Max($copy.Count, $script:MasterRegion.Count)
@@ -115,10 +131,75 @@ Describe 'Copies of the Graph helpers' {
             $actual = if ($i -lt $copy.Count) { $copy[$i] } else { '<end of region>' }
 
             if ($actual -cne $expected) {
-                throw ("{0} differs from the template at line {1} of the region.`n  template: {2}`n  copy:     {3}`n" +
-                    "Paste the region from Templates/Script-Template.ps1 over this copy.") -f $Name, ($i + 1), $expected, $actual
+                throw ("{0} differs from the template at line {1} of the {4} region.`n  template: {2}`n  copy:     {3}`n" +
+                    "Paste the region from Templates/Script-Template.ps1 over this copy.") -f $Name, ($i + 1), $expected, $actual, $Region
             }
         }
+    }
+}
+
+Describe 'How a Graph script reports failure' {
+
+    BeforeAll {
+        function Get-SyntaxTree {
+            param ([string]$Path)
+
+            $parseErrors = $null
+            $syntaxTree = [System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$null, [ref]$parseErrors)
+            if ($parseErrors) { throw "$Path does not parse: $($parseErrors[0].Message)" }
+            $syntaxTree
+        }
+    }
+
+    It '<Name> declares no module with #Requires, which would cost it its exit code under -File' -ForEach $script:Scripts {
+        $requirements = (Get-SyntaxTree -Path $Path).ScriptRequirements
+        $declared = @(if ($requirements) { $requirements.RequiredModules | ForEach-Object { $_.Name } })
+
+        $declared | Should -HaveCount 0 -Because 'the Graph module region loads the module instead, and says why'
+    }
+
+    It '<Name> gives every Write-Error parameters that go together' -ForEach $script:Scripts {
+        # -Message with -ErrorRecord is the mistake this guards against: they
+        # belong to different parameter sets, so Write-Error fails instead of
+        # reporting, and only ever inside a catch block that a test of the
+        # main block does not reach.
+        $calls = @((Get-SyntaxTree -Path $Path).FindAll({
+                    param ($node)
+                    $node -is [System.Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Write-Error'
+                }, $true))
+        $calls.Count | Should -BeGreaterThan 0
+
+        $refused = @(
+            foreach ($call in $calls) {
+                $binding = [System.Management.Automation.Language.StaticParameterBinder]::BindCommand($call, $true)
+                foreach ($problem in $binding.BindingExceptions.Values) {
+                    "line $($call.Extent.StartLineNumber): $($problem.BindingException.Message)"
+                }
+            }
+        )
+
+        $refused | Should -HaveCount 0
+    }
+}
+
+Describe 'The template, run as a file where the module is not installed' -Skip:$script:ModuleAvailable {
+
+    It 'exits 1 and says what to install' {
+        # Started with -File, as a scheduled task would start it. The module
+        # is loaded before anything else, so nothing here can sign in. The
+        # text comes back without white space, because the host wraps errors.
+        # Continue, not the caller's Stop: Windows PowerShell 5.1 turns the
+        # child's error output into a terminating error under Stop, which
+        # is what the Windows PowerShell step in CI sets, and the test would
+        # end there instead of reading the exit code.
+        $ErrorActionPreference = 'Continue'
+        $output = @(& (Get-Process -Id $PID).Path -NoProfile -NonInteractive -File $script:TemplatePath `
+                -TenantId 'contoso.onmicrosoft.com' -GroupId ([guid]::Empty.ToString()) 2>&1)
+        $exitCode = $LASTEXITCODE
+        $text = (@($output | ForEach-Object { [string]$_ }) -join '') -replace '\s', ''
+
+        $exitCode | Should -Be 1
+        $text | Should -BeLike '*Microsoft.Graph.Authentication2.0.0orlatercouldnotbeloaded*Install-Module-NameMicrosoft.Graph.Authentication*'
     }
 }
 
@@ -238,7 +319,7 @@ Describe 'Graph helpers' {
             'DeviceManagementManagedDevices.Read.All' = @('DeviceManagementManagedDevices.ReadWrite.All')
         }
 
-        . ([scriptblock]::Create(((Get-HelperRegion -Path $script:TemplatePath) -join [Environment]::NewLine)))
+        . ([scriptblock]::Create(((Get-CopiedRegion -Path $script:TemplatePath) -join [Environment]::NewLine)))
 
         Mock Start-Sleep { $script:Sleeps.Add($Seconds) }
     }
@@ -340,37 +421,65 @@ Describe 'Graph helpers' {
             $script:Notices[0] | Should -Match '^No response from GET'
         }
 
-        It 'never resends a POST that got no response, because it may have landed' {
+        It 'never resends a <Method> that got no response, because it may have landed' -ForEach @(
+            @{ Method = 'POST' }
+            @{ Method = 'PATCH' }
+            @{ Method = 'DELETE' }
+        ) {
             $script:Responses.Enqueue([System.Net.Http.HttpRequestException]::new('The response ended prematurely'))
 
-            $failure = { Invoke-GraphRequestWithRetry -Uri $script:Uri -Method POST -Body @{ serialNumber = 'x' } } |
+            $failure = { Invoke-GraphRequestWithRetry -Uri $script:Uri -Method $Method -Body @{ serialNumber = 'x' } } |
                 Should -Throw -PassThru
 
             $failure.Exception.Data['StatusCode'] | Should -Be 0
             $failure.Exception.InnerException | Should -BeOfType [System.Net.Http.HttpRequestException]
             $script:Requests.Count | Should -Be 1
+            $script:Requests[0].Method | Should -Be $Method
         }
 
-        It 'resends a POST after HTTP <Status>: <Resent>' -ForEach @(
-            @{ Status = 429; Resent = $true }
-            @{ Status = 503; Resent = $true }
-            @{ Status = 500; Resent = $false }
-            @{ Status = 502; Resent = $false }
-            @{ Status = 504; Resent = $false }
+        It 'resends a <Method> after HTTP <Status>: <Resent>' -ForEach @(
+            foreach ($method in 'POST', 'PATCH', 'DELETE') {
+                @{ Method = $method; Status = 429; Resent = $true }
+                @{ Method = $method; Status = 503; Resent = $true }
+                @{ Method = $method; Status = 500; Resent = $false }
+                @{ Method = $method; Status = 502; Resent = $false }
+                @{ Method = $method; Status = 504; Resent = $false }
+            }
         ) {
             $script:Responses.Enqueue((Get-StandInResponse -Status $Status -RetryAfter '1'))
             $script:Responses.Enqueue((Get-StandInResponse -Status 201 -Content '{"id":"new"}'))
 
-            $call = { Invoke-GraphRequestWithRetry -Uri $script:Uri -Method POST -Body @{ serialNumber = 'x' } -OnRetry { param ($Message) $script:Notices.Add($Message) } }
+            $call = { Invoke-GraphRequestWithRetry -Uri $script:Uri -Method $Method -Body @{ serialNumber = 'x' } -OnRetry { param ($Message) $script:Notices.Add($Message) } }
 
             if ($Resent) {
                 (& $call).id | Should -Be 'new'
                 $script:Requests.Count | Should -Be 2
             }
             else {
-                $call | Should -Throw "*HTTP $Status from POST*"
+                $call | Should -Throw "*HTTP $Status from $Method*"
                 $script:Requests.Count | Should -Be 1
             }
+        }
+
+        It 'sends a PATCH with its body and a DELETE without one, and returns nothing for an empty 204' {
+            $script:Responses.Enqueue((Get-StandInResponse -Status 204 -Content ''))
+            $script:Responses.Enqueue((Get-StandInResponse -Status 204 -Content ''))
+
+            $patched = Invoke-GraphRequestWithRetry -Uri $script:Uri -Method PATCH -Body @{ accountEnabled = $false }
+            $deleted = Invoke-GraphRequestWithRetry -Uri $script:Uri -Method DELETE
+
+            $patched | Should -BeNullOrEmpty
+            $deleted | Should -BeNullOrEmpty
+            $script:Requests[0].Method | Should -Be 'PATCH'
+            $script:Requests[0].Body['accountEnabled'] | Should -BeFalse
+            $script:Requests[1].Method | Should -Be 'DELETE'
+            $script:Requests[1].Body | Should -BeNullOrEmpty
+        }
+
+        It 'refuses a method it has no retry rule for' {
+            { Invoke-GraphRequestWithRetry -Uri $script:Uri -Method PUT } | Should -Throw
+
+            $script:Requests.Count | Should -Be 0
         }
 
         It 'fails at once on an error that is not about the network, such as not being signed in' {
@@ -421,6 +530,65 @@ Describe 'Graph helpers' {
 
             $run.Warnings | Should -HaveCount 0
             $script:Notices | Should -HaveCount 1
+        }
+    }
+
+    Context 'ConvertTo-UtcDateTime' {
+
+        BeforeAll {
+            $script:QuarterPastTen = [datetime]::new(2026, 3, 1, 10, 15, 0, [DateTimeKind]::Utc)
+        }
+
+        It 'reads <Case> as 10:15 UTC' -ForEach @(
+            @{ Case = 'text ending in Z'; Value = '2026-03-01T10:15:00Z' }
+            @{ Case = 'text with fractional seconds'; Value = '2026-03-01T10:15:00.0000000Z' }
+            @{ Case = 'text with a positive offset'; Value = '2026-03-01T12:15:00+02:00' }
+            @{ Case = 'text with a negative offset'; Value = '2026-03-01T05:15:00-05:00' }
+            @{ Case = 'text without an offset (UTC, not local time)'; Value = '2026-03-01T10:15:00' }
+            @{ Case = 'a DateTime of Utc kind'; Value = [datetime]::new(2026, 3, 1, 10, 15, 0, [DateTimeKind]::Utc) }
+            @{ Case = 'a DateTime of Local kind'; Value = [datetime]::new(2026, 3, 1, 10, 15, 0, [DateTimeKind]::Utc).ToLocalTime() }
+            @{ Case = 'a DateTime of Unspecified kind (taken as UTC)'; Value = [datetime]::new(2026, 3, 1, 10, 15, 0, [DateTimeKind]::Unspecified) }
+            @{ Case = 'a DateTimeOffset'; Value = [datetimeoffset]::new(2026, 3, 1, 12, 15, 0, [timespan]::FromHours(2)) }
+        ) {
+            $result = ConvertTo-UtcDateTime -Value $Value
+
+            $result | Should -BeOfType [datetime]
+            $result.Kind | Should -Be ([DateTimeKind]::Utc)
+            $result | Should -Be $script:QuarterPastTen
+        }
+
+        It 'reads a date without a time as midnight UTC' {
+            $result = ConvertTo-UtcDateTime -Value '2026-03-01'
+
+            $result.Kind | Should -Be ([DateTimeKind]::Utc)
+            $result | Should -Be ([datetime]::new(2026, 3, 1, 0, 0, 0, [DateTimeKind]::Utc))
+        }
+
+        It 'returns $null for <Case>' -ForEach @(
+            @{ Case = '$null'; Value = $null }
+            @{ Case = 'an empty string'; Value = '' }
+            @{ Case = 'whitespace'; Value = '   ' }
+        ) {
+            $result = @(ConvertTo-UtcDateTime -Value $Value)
+
+            $result.Count | Should -BeLessOrEqual 1
+            $null -eq ($result | Select-Object -First 1) | Should -BeTrue
+        }
+
+        It 'throws on text that is not a timestamp, naming it, rather than returning $null' {
+            { ConvertTo-UtcDateTime -Value 'not a timestamp' } | Should -Throw "*'not a timestamp' is not a timestamp*"
+        }
+
+        It 'does not depend on the culture of the session' {
+            $saved = [System.Threading.Thread]::CurrentThread.CurrentCulture
+            try {
+                [System.Threading.Thread]::CurrentThread.CurrentCulture = [cultureinfo]::new('de-DE')
+
+                ConvertTo-UtcDateTime -Value '2026-03-01T12:15:00+02:00' | Should -Be $script:QuarterPastTen
+            }
+            finally {
+                [System.Threading.Thread]::CurrentThread.CurrentCulture = $saved
+            }
         }
     }
 
@@ -591,6 +759,14 @@ try {
                     $body = '{"value":[{"id":"a"},{"id":"b"}],"@odata.nextLink":"http://localhost:' + $port + '/v1.0/page2"}'
                 }
                 '/v1.0/page2' { $response.StatusCode = 200; $body = '{"value":[{"id":"c"}]}' }
+                '/v1.0/changed' {
+                    # Answers a write as Graph does, with 204 and no body, and
+                    # keeps what arrived under the method that sent it.
+                    $reader = [System.IO.StreamReader]::new($context.Request.InputStream)
+                    $hits[$context.Request.HttpMethod] = $reader.ReadToEnd()
+                    $response.StatusCode = 204
+                    $body = ''
+                }
                 default { $response.StatusCode = 404; $body = '{"error":{"code":"NotFound","message":"no such path"}}' }
             }
             $bytes = [System.Text.Encoding]::UTF8.GetBytes($body)
@@ -633,6 +809,14 @@ try {
         $result.FlakyHits = [int]$hits['/v1.0/flaky']
 
         $result.PagedCount = (Get-GraphCollection -Uri "$base/page1" -OnRetry $onRetry).Count
+
+        $patched = Invoke-GraphRequestWithRetry -Uri "$base/changed" -Method PATCH -Body @{ accountEnabled = $false } -OnRetry $onRetry
+        $deleted = Invoke-GraphRequestWithRetry -Uri "$base/changed" -Method DELETE -OnRetry $onRetry
+        $result.PatchReturnedNothing = $null -eq $patched
+        $result.PatchBody = [string]$hits['PATCH']
+        $result.DeleteReturnedNothing = $null -eq $deleted
+        $result.DeleteArrived = $hits.ContainsKey('DELETE')
+
         $result.MaxRetryAfter = (Get-MgRequestContext).MaxRetry
 
         $null = Disconnect-MgGraph
@@ -677,6 +861,16 @@ catch {
 
     It 'follows @odata.nextLink through the SDK' {
         $script:Live.PagedCount | Should -Be 3
+    }
+
+    It 'sends a PATCH with its body as JSON, and takes the empty 204 as success' {
+        ($script:Live.PatchBody | ConvertFrom-Json).accountEnabled | Should -BeFalse
+        $script:Live.PatchReturnedNothing | Should -BeTrue
+    }
+
+    It 'sends a DELETE, and takes the empty 204 as success' {
+        $script:Live.DeleteArrived | Should -BeTrue
+        $script:Live.DeleteReturnedNothing | Should -BeTrue
     }
 
     It 'leaves the SDK retry setting as it found it' {

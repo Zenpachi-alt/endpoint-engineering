@@ -3,7 +3,6 @@
 # Source: https://github.com/Zenpachi-alt/endpoint-engineering
 
 #Requires -Version 5.1
-#Requires -Modules @{ ModuleName = 'Microsoft.Graph.Authentication'; ModuleVersion = '2.0.0' }
 
 <#
 .SYNOPSIS
@@ -177,6 +176,28 @@ param (
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+#region Graph module
+# Identical in every script under Graph/, like the Graph helpers below. The
+# master copy is the one in Templates/Script-Template.ps1, and
+# Templates/Script-Template.Tests.ps1 fails while any copy differs.
+#
+# The module is loaded here rather than declared with '#Requires -Modules',
+# which costs a script its exit code. PowerShell loads a module declared that
+# way before the script starts, and when the module runs code of its own while
+# it loads, as this one does, a script started with -File reports 0 whatever
+# it exits with.
+try {
+    # 4>$null, or a run with -Verbose lists every command the module imports.
+    Import-Module -Name Microsoft.Graph.Authentication -MinimumVersion 2.0.0 -ErrorAction Stop 4>$null
+}
+catch {
+    Write-Error -Exception $_.Exception -ErrorAction Continue -Message (
+        "Microsoft.Graph.Authentication 2.0.0 or later could not be loaded: $($_.Exception.Message) " +
+        'If it is not installed, run: Install-Module -Name Microsoft.Graph.Authentication -Scope CurrentUser')
+    exit 1
+}
+#endregion Graph module
+
 # ReadWrite also grants read; accept it rather than demanding a second consent.
 $RequiredScopes = [ordered]@{
     'DeviceManagementManagedDevices.Read.All' = @('DeviceManagementManagedDevices.ReadWrite.All')
@@ -247,6 +268,50 @@ function ConvertFrom-GraphJson {
     }
 
     ConvertFrom-Json @parameters
+}
+
+function ConvertTo-UtcDateTime {
+    <#
+        .SYNOPSIS
+            Reads a Graph timestamp as a UTC DateTime, or $null when there is
+            none.
+
+        .DESCRIPTION
+            Accepts the text Graph sent, and the DateTime that PowerShell 7.0
+            to 7.4 make of it. Graph sends timestamps in UTC, so text without
+            an offset and a DateTime of unspecified kind are read as UTC, never
+            as local time. Text that is not a timestamp throws, rather than
+            passing for a missing value.
+    #>
+    [CmdletBinding()]
+    [OutputType([datetime])]
+    param (
+        [Parameter(Mandatory)]
+        [AllowNull()]
+        [AllowEmptyString()]
+        $Value
+    )
+
+    if ($null -eq $Value -or [string]::IsNullOrWhiteSpace([string]$Value)) { return $null }
+
+    if ($Value -is [datetimeoffset]) { return $Value.UtcDateTime }
+
+    if ($Value -is [datetime]) {
+        if ($Value.Kind -eq [DateTimeKind]::Unspecified) {
+            return [datetime]::SpecifyKind($Value, [DateTimeKind]::Utc)
+        }
+        return $Value.ToUniversalTime()
+    }
+
+    $styles = [System.Globalization.DateTimeStyles]::AdjustToUniversal -bor
+        [System.Globalization.DateTimeStyles]::AssumeUniversal
+    $parsed = [datetime]::MinValue
+
+    if (-not [datetime]::TryParse([string]$Value, [cultureinfo]::InvariantCulture, $styles, [ref]$parsed)) {
+        throw "'$Value' is not a timestamp. Graph sends ISO 8601 text such as 2026-03-01T10:15:00Z."
+    }
+
+    return $parsed
 }
 
 function Get-GraphErrorText {
@@ -369,9 +434,10 @@ function Invoke-GraphRequestWithRetry {
             process-wide: do not call this from parallel runspaces.
 
             GET is retried on 429, 500, 502, 503 and 504, and when no response
-            arrives at all. POST is retried only on 429 and 503, the answers
-            that mean the service did not act on the request: retrying a POST
-            after any other failure could create the same object twice.
+            arrives at all. POST, PATCH and DELETE are retried only on 429 and
+            503, the answers that mean the service did not act on the request:
+            retrying after any other failure could repeat a change that had
+            already landed.
 
             A request that still fails throws. Data['StatusCode'] on the
             exception holds the last HTTP status, or 0 when nothing came back.
@@ -387,7 +453,7 @@ function Invoke-GraphRequestWithRetry {
         [string]$Uri,
 
         [Parameter()]
-        [ValidateSet('GET', 'POST')]
+        [ValidateSet('GET', 'POST', 'PATCH', 'DELETE')]
         [string]$Method = 'GET',
 
         [Parameter()]
@@ -664,37 +730,6 @@ function Connect-GraphSession {
 }
 #endregion Graph helpers
 
-function ConvertTo-UtcDateTime {
-    <#
-        .SYNOPSIS
-            Reads a Graph timestamp as a UTC DateTime. The helpers keep
-            timestamps as the text Graph sent where PowerShell allows, and
-            PowerShell 7.0 to 7.4 hand back a DateTime instead, so both arrive
-            here.
-    #>
-    [CmdletBinding()]
-    [OutputType([datetime])]
-    param (
-        [Parameter(Mandatory)]
-        [AllowNull()]
-        $Value
-    )
-
-    if ($null -eq $Value -or [string]::IsNullOrWhiteSpace([string]$Value)) { return $null }
-
-    if ($Value -is [datetime]) {
-        if ($Value.Kind -eq [DateTimeKind]::Unspecified) {
-            return [datetime]::SpecifyKind($Value, [DateTimeKind]::Utc)
-        }
-        return $Value.ToUniversalTime()
-    }
-
-    $styles = [System.Globalization.DateTimeStyles]::AdjustToUniversal -bor
-        [System.Globalization.DateTimeStyles]::AssumeUniversal
-
-    return [datetime]::Parse([string]$Value, [cultureinfo]::InvariantCulture, $styles)
-}
-
 function ConvertTo-DeviceRecord {
     <#
         .SYNOPSIS
@@ -818,7 +853,11 @@ try {
     $results
 }
 catch {
-    Write-Error -Message "Inventory failed: $($_.Exception.Message)" -ErrorRecord $_
+    # -Exception, not -ErrorRecord: Write-Error takes -Message with the first
+    # and not with the second, and would fail here instead of reporting.
+    # -ErrorAction Continue, or the preference set above would stop the script
+    # at this line, before exit sets the code.
+    Write-Error -Exception $_.Exception -Message "Inventory failed: $($_.Exception.Message)" -ErrorAction Continue
     exit 1
 }
 finally {

@@ -24,7 +24,8 @@ with the payload, detection logic, and documentation that belong to it.
 | `Graph/` | Admin-side tooling run from a workstation against a tenant through Microsoft Graph, whatever workload it touches. |
 | `Graph/Autopilot/` | Registering and reporting on Windows Autopilot device identities. |
 | `Graph/Configuration/` | Backup and reporting over Intune configuration objects. |
-| `Graph/Devices/` | Managed device reporting and inventory. |
+| `Graph/Devices/` | Managed device reporting and inventory, and cleanup of stale Entra device objects. |
+| `Graph/Groups/` | Group membership changes: resolving device names to object IDs and adding them to groups. |
 | `Standalone/` | Scripts that run on their own: text and log handling, installer inspection, local diagnostics, one-off utilities. No Intune delivery, no Graph. |
 
 Folders are created by the first file that belongs in them, so not every path
@@ -52,8 +53,12 @@ If a script fits none of these, that is worth a pause rather than a new folder.
 | --- | --- | --- |
 | Graph / Autopilot | [`Import-AutopilotDeviceIdentity.ps1`](Graph/Autopilot/Import-AutopilotDeviceIdentity.ps1) | Registers devices with Windows Autopilot from a hardware hash CSV. |
 | Graph / Configuration | [`Backup-IntuneConfiguration.ps1`](Graph/Configuration/Backup-IntuneConfiguration.ps1) | Read-only backup of remediations, platform scripts, configuration profiles, compliance policies and Windows update policies. |
+| Graph / Devices | [`Get-BitLockerKeyEscrowReport.ps1`](Graph/Devices/Get-BitLockerKeyEscrowReport.ps1) | For every Windows device, whether Entra ID holds its BitLocker recovery key: the authoritative check behind the BitLockerKeyEscrow package. Never reads a key. |
 | Graph / Devices | [`Get-ManagedDeviceInventory.ps1`](Graph/Devices/Get-ManagedDeviceInventory.ps1) | Every Intune managed device in the tenant, filterable, with optional CSV export. |
+| Graph / Devices | [`Remove-StaleEntraDevice.ps1`](Graph/Devices/Remove-StaleEntraDevice.ps1) | Finds stale Entra device objects, disables them, and deletes them after a grace period. One explicit stage per run, report by default; deletion cannot be undone. |
+| Graph / Groups | [`Add-GroupDeviceMember.ps1`](Graph/Groups/Add-GroupDeviceMember.ps1) | Resolves device names to Entra object IDs, filtered by join type and recent activity, and adds them to a group or writes the portal's bulk import CSV. |
 | Intune / Windows / Autopilot | [`Get-AutopilotHardwareHash.ps1`](Intune/Windows/Autopilot/Get-AutopilotHardwareHash.ps1) | Collects the Autopilot hardware hash on a device during OOBE, offline, with no modules. |
+| Intune / Windows / Remediations | [`BitLockerKeyEscrow/`](Intune/Windows/Remediations/BitLockerKeyEscrow/) | Finds BitLocker recovery passwords with no evidence of backup to Entra ID, and backs them up, confirmed by Windows' own event. Never reads a password. |
 | Intune / Windows / Remediations | [`ComponentRepairSource/`](Intune/Windows/Remediations/ComponentRepairSource/) | Detection only: where DISM would get repair files on each device, listing the devices where it has none. |
 | Intune / Windows / Remediations | [`SystemFileHealth/`](Intune/Windows/Remediations/SystemFileHealth/) | Finds and repairs corrupt system files: SFC, and DISM only when SFC cannot finish. TimeGuard limits the heavy scans. |
 | Standalone | [`Get-InstallerInfo.ps1`](Standalone/Get-InstallerInfo.ps1) | Reads what an Intune Win32 app needs from an MSI, an EXE installer or an `.intunewin` package: codes, install context, silent switches, and suggested commands and detection. |
@@ -62,8 +67,11 @@ If a script fits none of these, that is worth a pause rather than a new folder.
 ## Working in this repo
 
 ```powershell
-# Once per machine: the only dependency for the checks below.
+# Once per machine: the tools for the checks below. CI pins exact versions in
+# the env block at the top of .github/workflows/ci.yml; install those
+# (-RequiredVersion) to see exactly what CI sees.
 Install-Module -Name PSScriptAnalyzer -Scope CurrentUser -Force
+Install-Module -Name Pester -MinimumVersion 5.5.0 -Scope CurrentUser -Force -SkipPublisherCheck
 
 # Once per clone: enable the pre-commit scan for tenant identifiers and secrets.
 .\Tools\Install-GitHook.ps1
@@ -96,10 +104,18 @@ run against a tenant, `Templates/Remediation/` for scripts that run on a device.
 | Check | What it enforces |
 | --- | --- |
 | PSScriptAnalyzer | ParseError, Error and Warning findings fail the build, using `PSScriptAnalyzerSettings.psd1`. |
-| Pester | Every `*.Tests.ps1` in the repository runs under PowerShell 7, and a failing test fails the build. Among them: every script under `Graph/` carries an unchanged copy of the template's Graph helpers. |
+| Pester | Every `*.Tests.ps1` in the repository runs under PowerShell 7, and a failing test fails the build. Among them: every copied block — the Graph module check, the Graph helpers, TimeGuard, the remediation test harness — matches its canonical copy, no script under `Graph/` declares a module with `#Requires`, which would cost it its exit code under `pwsh -File`, and every remediation detection script exits `2`, never `1`, when it fails. |
 | Windows PowerShell 5.1 compatibility | Scripts that declare `#Requires -Version 5.1` are checked against it, and parsed by the 5.1 parser on a Windows runner. Their tests declare it too and run there again, under Windows PowerShell 5.1. Everything else is free to use PowerShell 7. |
 | Sensitive content scan | No tenant identifiers or credential material, with matched values masked so the log stays safe to publish. |
 | Folder READMEs | Every folder documents itself. |
+
+Every tool CI installs is pinned, so a result changes only with a commit.
+PSScriptAnalyzer, Pester and `Microsoft.Graph.Authentication` are held to exact
+versions in the `env` block at the top of the workflow; raise one there after
+running the checks locally against the new release. Actions are pinned by
+commit, with the release in a comment, and
+[`.github/dependabot.yml`](.github/dependabot.yml) proposes updates to them
+monthly as pull requests that CI checks first.
 
 Conventions the checks are derived from — naming, error handling, required
 documentation, and the rule against committing real tenant identifiers — are in

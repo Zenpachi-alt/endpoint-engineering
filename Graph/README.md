@@ -9,7 +9,8 @@ a device, or that run on one, belong under `Intune/` instead.
 | --- | --- |
 | `Autopilot/` | Registering and reporting on Windows Autopilot device identities. |
 | `Configuration/` | Backup and reporting over Intune configuration objects: remediations, scripts, profiles, compliance policies, Windows update policies. |
-| `Devices/` | Managed device reporting and inventory. |
+| `Devices/` | Managed device reporting and inventory, and cleanup of stale Entra device objects. |
+| `Groups/` | Group membership changes: resolving device names to object IDs and adding them to groups. |
 
 ## Conventions for everything in this folder
 
@@ -18,6 +19,12 @@ a device, or that run on one, belong under `Intune/` instead.
   so it still runs when copied out on its own. A test fails while any copy
   differs from the template's; see [`Templates/README.md`](../Templates/README.md).
   The conventions below are what those helpers implement.
+- **An exit code that means the same however the script is started.** `0` for
+  success and non-zero for failure, read as `$LASTEXITCODE` in a session or
+  returned by `pwsh -File` to a scheduled task. Each script loads the Graph
+  module with the template's `#region Graph module` block, also unchanged, and
+  never with `#Requires -Modules`, which costs a script its exit code under
+  `-File`. [`Templates/README.md`](../Templates/README.md) has the detail.
 - **Read-only unless stated.** Anything that writes gates the change behind
   `ShouldProcess` and defaults to report-only.
 - **Narrowest scopes.** Request only what the script calls, and verify the
@@ -30,7 +37,8 @@ a device, or that run on one, belong under `Intune/` instead.
   reads one page and stops is a script that silently under-reports.
 - **Expect throttling.** Retry on 429 and 5xx, waiting the `Retry-After` value
   when the service sends one and backing off exponentially when it does not.
-  Retry a POST only on 429 and 503, which mean the service did not act on it.
+  Retry a POST, PATCH or DELETE only on 429 and 503, which mean the service did
+  not act on it.
   The Graph SDK's own hidden retry is switched off per request, so there is one
   retry loop, not two stacked.
 - **v1.0 by default.** Use beta only when a property or endpoint exists nowhere

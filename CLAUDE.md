@@ -107,6 +107,19 @@ whole region over every copy, and run Pester:
 `Templates/Script-Template.Tests.ps1` fails while any copy differs, and names
 the first line that does. Script-specific code stays outside the region.
 
+The same scripts carry the template's `#region Graph module` block, by the
+same rule, and it is the only thing that loads `Microsoft.Graph.Authentication`.
+**Never declare a module with `#Requires -Modules` in a script under
+`Graph/`**: a module PowerShell loads that way can cost the script its exit
+code, so that `pwsh -File` reports `0` whatever the script exits with. The
+main `catch` reports with
+`Write-Error -Exception $_.Exception -Message "..." -ErrorAction Continue` and
+then `exit 1`. Never give `-Message` together with `-ErrorRecord`: `Write-Error`
+fails instead of reporting. The template's tests check both, and
+`Templates/README.md` has the reasons. Where a script can fail before it signs
+in, its tests start it with `-File` in a child process and assert the exit
+code and the message, because a test of the main block never runs its `catch`.
+
 **Endpoint-side** — run by the Intune management extension on a managed device.
 Start from `Templates/Remediation/`. **Windows PowerShell 5.1 only**, because
 that is what ships with Windows; PowerShell 7 has to be deployed separately and
@@ -117,6 +130,14 @@ scripts must exit `1` and only `1` for "issue found"; any other non-zero code
 must mean "the detection failed", so a broken script never triggers a
 remediation fleet-wide. Remediation scripts verify the change before reporting
 success.
+
+Every remediation package has a `<Noun>.Tests.ps1` that runs its scripts
+through the `#region Remediation test harness` block of
+`Templates/Remediation/ExampleSetting.Tests.ps1`, with stand-ins for whatever
+touches the device, and asserts the exit code and output line of every path.
+The harness and the TimeGuard region follow the same rule as the Graph
+helpers: change the canonical copy, paste the whole region over every copy,
+and run Pester, which fails while any copy differs.
 
 **Declare the version honestly.** `#Requires -Version` is the contract, and CI
 reads it: a script that declares `5.1` is checked for Windows PowerShell
@@ -154,6 +175,11 @@ request, and additionally checks every script that declares
 `PSScriptAnalyzerSettings.WindowsPowerShell.psd1` and with the 5.1 parser on a
 Windows runner. The tests of those scripts, which declare 5.1 too, also run
 there under Windows PowerShell 5.1. The hook is a convenience; CI is the gate.
+
+CI pins every tool it installs: module versions in the `env` block at the top of
+`ci.yml`, actions by commit SHA with the release in a comment. Never loosen a
+pin to a minimum version or a moving tag. Raise a module version only after the
+checks pass locally against it.
 
 The scanner matches shapes, not meaning. Design-level identifiers that survive
 scrubbing — distinctive policy, app, group or script names, naming conventions,
