@@ -71,10 +71,13 @@ Describe 'Get-InstallerInfo' -Skip:([Environment]::OSVersion.Platform -ne 'Win32
             @($Argument | ForEach-Object { if ($_ -like '-*') { $_ } else { '"{0}"' -f $_ } })
             $process = Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList $quoted -NoNewWindow -Wait -PassThru `
                 -RedirectStandardInput $stdin -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+            # PowerShell 7 may colour its output even into a file, depending on how its parent
+            # was started. The escape sequences would sit between the words the tests look for.
+            $ansi = '\x1b\[[0-9;?]*[A-Za-z]'
             [pscustomobject]@{
                 ExitCode = $process.ExitCode
-                StdOut   = [IO.File]::ReadAllText($stdout)
-                StdErr   = [IO.File]::ReadAllText($stderr)
+                StdOut   = [IO.File]::ReadAllText($stdout) -replace $ansi, ''
+                StdErr   = [IO.File]::ReadAllText($stderr) -replace $ansi, ''
             }
         }
 
@@ -723,7 +726,12 @@ Describe 'Get-InstallerInfo' -Skip:([Environment]::OSVersion.Platform -ne 'Win32
             $command = "`$ExecutionContext.SessionState.LanguageMode = 'ConstrainedLanguage'; " +
             "& '$($script:ScriptPath -replace "'", "''")' -Path '$($msi -replace "'", "''")'; exit `$LASTEXITCODE"
 
-            $output = & $hostPath -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $command 2>&1
+            # Windows PowerShell turns the child's standard error, read through 2>&1, into error
+            # records, which a Stop preference makes terminating. CI starts every step with one.
+            $output = & {
+                $ErrorActionPreference = 'Continue'
+                & $hostPath -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $command 2>&1
+            }
 
             $LASTEXITCODE | Should -Be 1
             ($output | Out-String) | Should -Match 'ConstrainedLanguage'
