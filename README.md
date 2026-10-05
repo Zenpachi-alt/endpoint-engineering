@@ -17,7 +17,7 @@ with the payload, detection logic, and documentation that belong to it.
 | --- | --- |
 | `Templates/` | Starting points for new scripts and artifacts. |
 | `Templates/Remediation/` | Detection and remediation script pair for Intune remediation packages, and the optional TimeGuard block that limits how often heavy work runs. |
-| `Tools/` | Repository maintenance: the identifier and secret scanner, and the git hook that runs it. |
+| `Tools/` | Repository maintenance: the script that runs every CI check, the identifier and secret scanner, and the git hook that runs the scan. |
 | `Intune/Windows/` | Artifacts that run on a device or are deployed to one: remediations, platform scripts, configuration profiles, applications, compliance policies. |
 | `Intune/Windows/Autopilot/` | Hardware hash handling, deployment profiles, Enrollment Status Page configuration. |
 | `Intune/Windows/Remediations/` | Remediation packages: a detection and remediation script pair per folder. |
@@ -67,30 +67,21 @@ If a script fits none of these, that is worth a pause rather than a new folder.
 ## Working in this repo
 
 ```powershell
-# Once per machine: the tools for the checks below. CI pins exact versions in
-# the env block at the top of .github/workflows/ci.yml; install those
-# (-RequiredVersion) to see exactly what CI sees.
-Install-Module -Name PSScriptAnalyzer -Scope CurrentUser -Force
-Install-Module -Name Pester -MinimumVersion 5.5.0 -Scope CurrentUser -Force -SkipPublisherCheck
-
 # Once per clone: enable the pre-commit scan for tenant identifiers and secrets.
 .\Tools\Install-GitHook.ps1
 
-# Any time: check the working tree by hand.
-.\Tools\Test-SensitiveContent.ps1
+# Before pushing: every check CI runs, run the way CI runs it. From pwsh on
+# Windows this covers both editions. -InstallModule installs the pinned module
+# versions on the first run; Windows PowerShell keeps its own modules, so the
+# first run installs into both.
+.\Tools\Invoke-RepositoryCheck.ps1 -InstallModule
+.\Tools\Invoke-RepositoryCheck.ps1
 
-# Before pushing: the same analysis CI runs.
-Invoke-ScriptAnalyzer -Path . -Recurse -Settings .\PSScriptAnalyzerSettings.psd1
+# A subset, for a quick look before committing.
+.\Tools\Invoke-RepositoryCheck.ps1 -Check Analyzer, Scan
 
-# Tests, where a script has them (Pester 5.5 or later).
-Invoke-Pester -Path . -Output Detailed
-
-# Optional: lets the Graph helper tests run against the real SDK, as CI does.
-Install-Module -Name Microsoft.Graph.Authentication -Scope CurrentUser
-
-# Scripts that declare #Requires -Version 5.1 are additionally held to it.
-Invoke-ScriptAnalyzer -Path .\Templates\Remediation -Recurse `
-    -Settings .\PSScriptAnalyzerSettings.WindowsPowerShell.psd1
+# One script's tests while working on it.
+Invoke-Pester -Path .\Standalone\Get-InstallerInfo.Tests.ps1 -Output Detailed
 ```
 
 New work starts from a template — `Templates/Script-Template.ps1` for tooling
@@ -99,23 +90,30 @@ run against a tenant, `Templates/Remediation/` for scripts that run on a device.
 
 ## Quality gates
 
-`.github/workflows/ci.yml` runs on every push and pull request:
+Every check lives in [`Tools/Invoke-RepositoryCheck.ps1`](Tools/Invoke-RepositoryCheck.ps1).
+`.github/workflows/ci.yml` runs it on every push and pull request, one check per
+step, and every step runs even after one fails, so a single run shows every
+failure:
 
-| Check | What it enforces |
-| --- | --- |
-| PSScriptAnalyzer | ParseError, Error and Warning findings fail the build, using `PSScriptAnalyzerSettings.psd1`. |
-| Pester | Every `*.Tests.ps1` in the repository runs under PowerShell 7, and a failing test fails the build. Among them: every copied block — the Graph module check, the Graph helpers, TimeGuard, the remediation test harness — matches its canonical copy, no script under `Graph/` declares a module with `#Requires`, which would cost it its exit code under `pwsh -File`, and every remediation detection script exits `2`, never `1`, when it fails. |
-| Windows PowerShell 5.1 compatibility | Scripts that declare `#Requires -Version 5.1` are checked against it, and parsed by the 5.1 parser on a Windows runner. Their tests declare it too and run there again, under Windows PowerShell 5.1. Everything else is free to use PowerShell 7. |
-| Sensitive content scan | No tenant identifiers or credential material, with matched values masked so the log stays safe to publish. |
-| Folder READMEs | Every folder documents itself. |
+| Check | What it enforces | Runs in CI on |
+| --- | --- | --- |
+| PSScriptAnalyzer | ParseError, Error and Warning findings fail the build, using `PSScriptAnalyzerSettings.psd1`. | Linux, PowerShell 7 |
+| Windows PowerShell 5.1 compatibility | Scripts that declare `#Requires -Version 5.1` are checked against it with `PSScriptAnalyzerSettings.WindowsPowerShell.psd1`, and parsed by the 5.1 parser. Everything else is free to use PowerShell 7. | Linux, PowerShell 7; Windows, 5.1 parser |
+| Sensitive content scan | No tenant identifiers or credential material, with matched values masked so the log stays safe to publish. | Linux |
+| Folder READMEs | Every folder documents itself. | Linux |
+| Pester | Every `*.Tests.ps1` passes under PowerShell 7, and the tests that declare 5.1 pass under Windows PowerShell 5.1 too. Among them: every copied block — the Graph module check, the Graph helpers, TimeGuard, the remediation test harness — matches its canonical copy, no script under `Graph/` declares a module with `#Requires`, which would cost it its exit code under `pwsh -File`, and every remediation detection script exits `2`, never `1`, when it fails. | Linux and Windows, PowerShell 7; Windows, 5.1 |
+
+Tests of Windows-only scripts skip on Linux, so the Windows run under
+PowerShell 7 is the one that exercises them there. Pester always runs with
+`$ErrorActionPreference = 'Stop'`, as GitHub's PowerShell shells start every
+step, so a test that fails only in CI fails locally too.
 
 Every tool CI installs is pinned, so a result changes only with a commit.
 PSScriptAnalyzer, Pester and `Microsoft.Graph.Authentication` are held to exact
-versions in the `env` block at the top of the workflow; raise one there after
-running the checks locally against the new release. Actions are pinned by
-commit, with the release in a comment, and
-[`.github/dependabot.yml`](.github/dependabot.yml) proposes updates to them
-monthly as pull requests that CI checks first.
+versions in `$PinnedModule` in the check script; raise one there after running
+the checks locally against the new release. Actions are pinned by commit, with
+the release in a comment, and [`.github/dependabot.yml`](.github/dependabot.yml)
+proposes updates to them monthly as pull requests that CI checks first.
 
 Conventions the checks are derived from — naming, error handling, required
 documentation, and the rule against committing real tenant identifiers — are in

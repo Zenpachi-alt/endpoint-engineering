@@ -13,214 +13,68 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# The exact version of every module CI installs, so a new release cannot
-# change a result without a commit that says so. Raise one here after running
-# the checks locally against the new version. Actions are pinned by commit
-# below, with the release in a comment; Dependabot proposes updates to those.
-env:
-  PSSCRIPTANALYZER_VERSION: '1.25.0'
-  PESTER_VERSION: '6.2.0'
-  GRAPH_AUTHENTICATION_VERSION: '2.40.0'
+# Every check lives in Tools/Invoke-RepositoryCheck.ps1, which also pins the
+# module versions CI installs, so running that script locally is running this
+# workflow. Each step runs one check, so the log names the one that failed, and
+# each runs even after an earlier one fails, so one run shows every failure.
+# Actions are pinned by commit, with the release in a comment; Dependabot
+# proposes updates to them.
 
 jobs:
-  analyse:
-    name: Analyse and scan
+  linux:
+    name: Checks under PowerShell 7 on Linux
     runs-on: ubuntu-latest
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install PSScriptAnalyzer
+      - name: PSScriptAnalyzer
+        if: ${{ !cancelled() }}
         shell: pwsh
-        run: |
-          # The runner image may carry another version. Each step that runs
-          # the analyzer imports the pinned one by name, so that one is used.
-          $version = [version]$env:PSSCRIPTANALYZER_VERSION
-          if (-not (Get-Module -ListAvailable -Name PSScriptAnalyzer | Where-Object Version -eq $version)) {
-            Install-Module -Name PSScriptAnalyzer -RequiredVersion $version -Scope CurrentUser -Force -ErrorAction Stop
-          }
-          Write-Output "PSScriptAnalyzer $version"
+        run: ./Tools/Invoke-RepositoryCheck.ps1 -Check Analyzer -InstallModule -Strict
 
-      - name: Run PSScriptAnalyzer
+      - name: Windows PowerShell 5.1 compatibility
+        if: ${{ !cancelled() }}
         shell: pwsh
-        run: |
-          Import-Module -Name PSScriptAnalyzer -RequiredVersion $env:PSSCRIPTANALYZER_VERSION -ErrorAction Stop
-          $results =Invoke-ScriptAnalyzer -Path . -Recurse -Settings ./PSScriptAnalyzerSettings.psd1 -ErrorAction Stop
-          if ($results) {
-            $results |
-              Sort-Object -Property Severity, ScriptName, Line |
-              Format-Table -AutoSize -Property Severity, RuleName, ScriptName, Line, Message |
-              Out-String -Width 200 |
-              Write-Output
-            throw "PSScriptAnalyzer reported $($results.Count) issue(s)."
-          }
-          Write-Output 'PSScriptAnalyzer: clean.'
-
-      - name: Run Pester tests
-        shell: pwsh
-        run: |
-          # The runner image may carry another Pester; the pinned one is
-          # installed beside it and imported by version.
-          $pester = [version]$env:PESTER_VERSION
-          if (-not (Get-Module -ListAvailable -Name Pester | Where-Object Version -eq $pester)) {
-            Install-Module -Name Pester -RequiredVersion $pester -Scope CurrentUser -Force -SkipPublisherCheck -ErrorAction Stop
-          }
-          Import-Module -Name Pester -RequiredVersion $pester -ErrorAction Stop
-          Write-Output "Pester $pester"
-
-          # The Graph helper tests skip their real-SDK part without the module.
-          # Here it always runs. The tests import the highest version present,
-          # so a newer copy on the runner would silently replace the pin: that
-          # fails the step instead.
-          $graph = [version]$env:GRAPH_AUTHENTICATION_VERSION
-          if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication | Where-Object Version -eq $graph)) {
-            Install-Module -Name Microsoft.Graph.Authentication -RequiredVersion $graph -Scope CurrentUser -Force -ErrorAction Stop
-          }
-          $highest = (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication | Sort-Object -Property Version -Descending | Select-Object -First 1).Version
-          if ($highest -ne $graph) {
-            throw "Microsoft.Graph.Authentication $highest on the runner is newer than the pinned $graph, and the tests would use it. Raise GRAPH_AUTHENTICATION_VERSION."
-          }
-          Write-Output "Microsoft.Graph.Authentication $graph"
-
-          $config = New-PesterConfiguration
-          $config.Run.Path = '.'
-          $config.Run.Exit = $true
-          $config.Output.Verbosity = 'Detailed'
-          Invoke-Pester -Configuration $config
-
-      - name: Check 5.1 compatibility of scripts that declare it
-        shell: pwsh
-        run: |
-          # A script is held to Windows PowerShell 5.1 only while it says it
-          # targets 5.1. Admin-side tooling targets PowerShell 7 and is exempt.
-          $targets = Get-ChildItem -Path . -Filter *.ps1 -Recurse -File |
-            Where-Object {
-              (Get-Content -LiteralPath $_.FullName -TotalCount 20) -match '^\s*#Requires\s+-Version\s+5\.1\s*$'
-            }
-
-          if (-not $targets) {
-            Write-Output 'No scripts declare #Requires -Version 5.1.'
-            exit 0
-          }
-
-          Import-Module -Name PSScriptAnalyzer -RequiredVersion $env:PSSCRIPTANALYZER_VERSION -ErrorAction Stop
-          $results = foreach ($target in $targets) {
-            Invoke-ScriptAnalyzer -Path $target.FullName -Settings ./PSScriptAnalyzerSettings.WindowsPowerShell.psd1 -ErrorAction Stop
-          }
-
-          if ($results) {
-            $results |
-              Format-Table -AutoSize -Property Severity, RuleName, ScriptName, Line, Message |
-              Out-String -Width 200 |
-              Write-Output
-            throw "$(@($results).Count) Windows PowerShell 5.1 compatibility issue(s)."
-          }
-
-          Write-Output "$(@($targets).Count) script(s) declare 5.1 and are compatible with it."
+        run: ./Tools/Invoke-RepositoryCheck.ps1 -Check Compatibility -InstallModule -Strict
 
       - name: Scan for tenant identifiers and secrets
+        if: ${{ !cancelled() }}
         shell: pwsh
-        run: |
-          # Values stay masked: this log is public once the repository is.
-          $findings = & ./Tools/Test-SensitiveContent.ps1
-          $code = $LASTEXITCODE
-          if ($code -ne 0) {
-            $findings |
-              Format-Table -AutoSize -Property Severity, Rule, File, Line, Match, Advice |
-              Out-String -Width 200 |
-              Write-Output
-            throw "Sensitive content scan exited with code $code."
-          }
-          Write-Output 'Sensitive content scan: clean.'
+        run: ./Tools/Invoke-RepositoryCheck.ps1 -Check Scan
 
-      - name: Check every folder has a README
+      - name: Folder READMEs
+        if: ${{ !cancelled() }}
         shell: pwsh
-        run: |
-          $missing = Get-ChildItem -Path . -Directory -Recurse -Force |
-            Where-Object { $_.FullName -notmatch '[\\/](\.git|\.github|\.claude|\.vscode)([\\/]|$)' } |
-            Where-Object { -not (Test-Path -LiteralPath (Join-Path $_.FullName 'README.md')) } |
-            ForEach-Object { Resolve-Path -LiteralPath $_.FullName -Relative }
+        run: ./Tools/Invoke-RepositoryCheck.ps1 -Check Readme
 
-          if ($missing) {
-            $missing | Write-Output
-            throw "$(@($missing).Count) folder(s) have no README.md. See CLAUDE.md."
-          }
-          Write-Output 'Folder READMEs: complete.'
+      - name: Pester under PowerShell 7
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: ./Tools/Invoke-RepositoryCheck.ps1 -Check Pester -InstallModule -Strict -PesterOutput Detailed
 
-  parse-windows-powershell:
-    name: Parse and test under Windows PowerShell 5.1
+  windows:
+    name: Checks on Windows, under Windows PowerShell 5.1 and PowerShell 7
     runs-on: windows-latest
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Parse scripts that declare 5.1 with the 5.1 parser
+      # Windows PowerShell is the only host on a managed device, so anything that
+      # declares 5.1 must parse, and pass its tests, under it.
+      - name: Parse under Windows PowerShell 5.1
+        if: ${{ !cancelled() }}
         shell: powershell
-        run: |
-          # Windows PowerShell is the only host present on a managed device, so
-          # anything that declares it must parse here. PowerShell 7 tooling is
-          # parsed by the PSScriptAnalyzer job instead.
-          # A List is used rather than a counter: ForEach-Object runs in a child
-          # scope, so an incremented int would never reach this scope.
-          $failures = New-Object System.Collections.Generic.List[string]
+        run: .\Tools\Invoke-RepositoryCheck.ps1 -Check Parse
 
-          Get-ChildItem -Path . -Filter *.ps1 -Recurse -File | ForEach-Object {
-            $file = $_
-
-            if (-not ((Get-Content -LiteralPath $file.FullName -TotalCount 20) -match '^\s*#Requires\s+-Version\s+5\.1\s*$')) {
-              return
-            }
-
-            $parseErrors = $null
-            [void][System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$null, [ref]$parseErrors)
-
-            foreach ($parseError in $parseErrors) {
-              $failures.Add("$($file.FullName)($($parseError.Extent.StartLineNumber)): $($parseError.Message)")
-            }
-          }
-
-          if ($failures.Count -gt 0) {
-            $failures | Write-Output
-            Write-Output "$($failures.Count) parse error(s) under Windows PowerShell 5.1."
-            exit 1
-          }
-
-          Write-Output 'Every script that declares Windows PowerShell 5.1 parses under it.'
-
-      - name: Run tests that declare 5.1 under Windows PowerShell 5.1
+      - name: Pester under Windows PowerShell 5.1
+        if: ${{ !cancelled() }}
         shell: powershell
-        run: |
-          # The analyse job runs every test under PowerShell 7, which cannot
-          # show what fails only on 5.1: .NET Framework types, cmdlets that
-          # behave differently, syntax 5.1 lacks. A test that declares 5.1 is
-          # the test of a script that must run there, so it runs here as well.
-          $targets = @(
-            Get-ChildItem -Path . -Filter *.Tests.ps1 -Recurse -File |
-              Where-Object {
-                (Get-Content -LiteralPath $_.FullName -TotalCount 20) -match '^\s*#Requires\s+-Version\s+5\.1\s*$'
-              }
-          )
+        run: .\Tools\Invoke-RepositoryCheck.ps1 -Check Pester -InstallModule -Strict -PesterOutput Detailed
 
-          if ($targets.Count -eq 0) {
-            Write-Output 'No tests declare #Requires -Version 5.1.'
-            exit 0
-          }
-
-          # Windows PowerShell ships Pester 3.4, signed by a different publisher
-          # than Pester 5, and a PowerShellGet that cannot install from the
-          # Gallery until the NuGet provider is present. The Gallery also needs
-          # TLS 1.2, which .NET Framework does not always offer by default.
-          $pester = [version]$env:PESTER_VERSION
-          if (-not (Get-Module -ListAvailable -Name Pester | Where-Object Version -eq $pester)) {
-            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-            $null = Install-PackageProvider -Name NuGet -Scope CurrentUser -Force -ErrorAction Stop
-            Install-Module -Name Pester -RequiredVersion $pester -Scope CurrentUser -Force -SkipPublisherCheck -ErrorAction Stop
-          }
-          Import-Module -Name Pester -RequiredVersion $pester -ErrorAction Stop
-          Write-Output "Pester $((Get-Module -Name Pester).Version) on Windows PowerShell $($PSVersionTable.PSVersion)"
-
-          $config = New-PesterConfiguration
-          $config.Run.Path = [string[]]@($targets | ForEach-Object FullName)
-          $config.Run.Exit = $true
-          $config.Output.Verbosity = 'Detailed'
-          Invoke-Pester -Configuration $config
+      # Tests of Windows-only scripts are skipped on Linux, so this is the only
+      # run of them under PowerShell 7, which is how most people run them.
+      - name: Pester under PowerShell 7
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: .\Tools\Invoke-RepositoryCheck.ps1 -Check Pester -InstallModule -Strict -PesterOutput Detailed
