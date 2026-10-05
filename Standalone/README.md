@@ -1,14 +1,16 @@
 # Standalone
 
 Scripts that run by themselves on a workstation or device and touch neither
-Intune nor a tenant: text and log handling, diagnostics, one-off utilities.
-Anything delivered through Intune belongs in `Intune/`, and anything that talks
-to Graph belongs in `Graph/`.
+Intune nor a tenant: text and log handling, installer inspection, diagnostics,
+one-off utilities. Anything delivered through Intune belongs in `Intune/`, and
+anything that talks to Graph belongs in `Graph/`.
 
 | Script | Purpose |
 | --- | --- |
 | `Invoke-TextScrub.ps1` | Replaces identifying values in text with consistent placeholders, and puts them back. |
 | `Invoke-TextScrub.Tests.ps1` | Pester tests for it. CI runs them on every push. |
+| `Get-InstallerInfo.ps1` | Reads what an Intune Win32 app needs from an MSI, an EXE installer or an `.intunewin` package. |
+| `Get-InstallerInfo.Tests.ps1` | Pester tests for it, under Windows PowerShell 5.1 and PowerShell 7. CI runs them on every push. |
 
 ## Invoke-TextScrub.ps1
 
@@ -132,3 +134,158 @@ Invoke-Pester -Path .\Standalone -Output Detailed
 The tests build every identifier-shaped value at run time, random GUIDs and a
 JWT assembled from parts, so the test file passes
 `Tools/Test-SensitiveContent.ps1` like any other file.
+
+## Get-InstallerInfo.ps1
+
+Reads what an Intune Win32 app needs from an installer: product and upgrade
+codes, the install context, silent switches, and suggested install, uninstall
+and detection settings. Takes an MSI, an EXE installer, or a finished
+`.intunewin` package. Read-only: nothing is installed, extracted or run.
+
+When an `.intunewin` is built from an MSI, the Intune portal fills in the
+product code by itself. The script is for everything else: checking an
+installer before packaging it, MSIs started by a wrapper script, EXE
+installers, and the details the portal does not show, such as a per-user
+package, cabinets that must travel with the MSI, or whether a new version
+removes the old one by itself.
+
+### Prerequisites
+
+| Requirement | Detail |
+| --- | --- |
+| PowerShell | 5.1 or later. Packaging is often done on a clean virtual machine that has only Windows PowerShell, and nothing here needs 7 |
+| Modules | None |
+| Graph scopes | None |
+| Admin consent | Not applicable |
+| Licensing | None |
+| Role | None. Runs as the signed-in user |
+| Platform | Windows. MSIs are read through `msi.dll`, signatures through Authenticode |
+| Language mode | FullLanguage. The script calls .NET directly and compiles a small `msi.dll` wrapper with `Add-Type`, which Constrained Language Mode blocks |
+
+### Examples
+
+```powershell
+# Everything the MSI holds that matters to a deployment
+.\Get-InstallerInfo.ps1 -Path .\ContosoApp.msi
+
+# Only the suggested Intune settings
+.\Get-InstallerInfo.ps1 -Path .\ContosoApp.msi | Select-Object -Property Intune*
+
+# Public properties that can be set on the msiexec command line
+(.\Get-InstallerInfo.ps1 -Path .\ContosoApp.msi).PublicProperties
+
+# One line per installer in a folder
+Get-ChildItem -Path .\Installers -File | .\Get-InstallerInfo.ps1 |
+    Format-Table -Property FileType, ProductName, ProductVersion, InstallerFramework
+
+# What an existing package was built from
+.\Get-InstallerInfo.ps1 -Path \SERVER-001\Packages\ContosoApp.intunewin
+```
+
+```text
+IntuneInstallCommand   : msiexec /i "ContosoApp.msi" /qn /norestart
+IntuneUninstallCommand : msiexec /x "{00000000-0000-0000-0000-000000000001}" /qn /norestart
+IntuneInstallBehavior  : System
+IntuneDetection        : MSI product code {00000000-0000-0000-0000-000000000001}, product
+                         version greater than or equal to 24.1.3115
+```
+
+The `Intune*` values are starting points to test on a virtual machine, not
+settings to paste unread.
+
+### What it reads
+
+The file type is recognised from the file's content, not its extension.
+
+| File | Reads | Main properties |
+| --- | --- | --- |
+| MSI | The Property table, the summary information, and the Upgrade, Media, File, LaunchCondition, Control and InstallExecuteSequence tables. Opened read-only | `ProductCode`, `UpgradeCode`, `PackageCode`, `ProductVersion`, `Architecture`, `InstallContext`, `RemovesOlderVersions`, `PublicProperties`, `ExternalCabinets`, `LooseFileCount`, `LaunchConditions` |
+| EXE | The version resource, the embedded manifest, the file headers, and the first 64 KB after the executable image. Never run | `ProductVersion`, `FileVersion`, `ExecutableArchitecture`, `RequestedExecutionLevel`, `InstallerFramework`, `FrameworkEvidence` |
+| `.intunewin` | `Metadata/Detection.xml`, the unencrypted part of the package | `SetupFile`, `ProductCode`, `UpgradeCode`, `MsiExecutionContext`, `ContentSizeBytes`, `ToolVersion` |
+
+Every result also carries `SignatureStatus`, `Signer`, the four `Intune*`
+properties and `Notes`.
+
+### How an MSI's install context is decided
+
+| Property table | `InstallContext` | Install behavior | Install command adds |
+| --- | --- | --- | --- |
+| `ALLUSERS=1` | `PerMachine` | System | |
+| `ALLUSERS=2` | `PerMachineWhenElevated` | System | |
+| `ALLUSERS=2`, `MSIINSTALLPERUSER=1` | `DualPurposePerUserDefault` | System | `ALLUSERS=1` |
+| No `ALLUSERS` | `PerUser` | User | |
+
+Windows Installer ignores `MSIINSTALLPERUSER` unless `ALLUSERS` is 2, and a
+per-user install stays per-user when SYSTEM runs it. A per-user package
+deployed as System therefore installs into the SYSTEM profile and reports
+success, while no user ever sees the app.
+
+### EXE installers
+
+| Framework | Recognised by | Install switches | Uninstall |
+| --- | --- | --- | --- |
+| WiX Burn | A `.wixburn` section | `/quiet /norestart` | The same file: `/uninstall /quiet /norestart` |
+| NSIS | Manifest identity `Nullsoft.NSIS.exehead`, or the NSIS header after the executable | `/S`, case-sensitive | The uninstaller written during install, with `/S` |
+| Inno Setup | Manifest identity `JR.Inno.Setup`, Inno Setup data after the executable, or the version comment | `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART` | `unins000.exe` in the app folder, same switches |
+| InstallShield | The word InstallShield in the manifest or version resource, which is weak evidence | `/s /v"/qn"` for Basic MSI projects | Depends on the project type |
+
+The switches are each framework's defaults, which a vendor can change.
+`FrameworkEvidence` says what each match rests on, and anything else is
+reported as `Unknown`.
+
+`ExecutableArchitecture` is that of the installer itself. Burn, NSIS and Inno
+Setup installers are 32-bit even when the app they install is 64-bit. An EXE
+carries no product code either, so detection comes from what a test install
+writes, such as `DisplayVersion` under the Uninstall registry key.
+
+### .intunewin packages
+
+The Win32 Content Prep Tool writes a ZIP archive: the setup folder, encrypted,
+and `Metadata/Detection.xml` in plain text. The XML records the setup file and,
+for an MSI, its codes and execution context. It also holds the key that
+decrypts the content, so anyone holding an `.intunewin` file can read what is
+inside it. The script reads only the identifying fields and never outputs the
+key. It refuses an XML file that declares a DTD, because a package can come
+from anywhere.
+
+The field names were checked against packages built by version 1.8.7 of the
+Content Prep Tool. If a later version renames one, that property comes back
+empty rather than failing.
+
+### Warnings
+
+These are written as warnings and kept in `Notes`, because each one makes a
+deployment fail:
+
+- a per-user MSI, or a dual-purpose MSI that defaults to per-user
+- cabinets in the Media table that are not embedded in the MSI
+- files stored uncompressed beside the MSI
+- a signature that no longer matches the file (`HashMismatch`)
+
+### Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Every file was read |
+| `1` | At least one file could not be read, or the script could not start. Every other file is still read and returned |
+
+### Limits
+
+- Not read: patches (`.msp`), transforms (`.mst`), merge modules (`.msm`),
+  MSIX and APPX packages. An MSI wrapped inside an EXE is not extracted.
+- Public properties are those with a default in the Property table or set by a
+  dialog. A property that only a custom action reads does not appear; the
+  vendor's documentation is the source for those.
+- A vendor's own bootstrapper is reported as `Unknown`.
+
+### Tests
+
+```powershell
+Invoke-Pester -Path .\Standalone\Get-InstallerInfo.Tests.ps1 -Output Detailed
+```
+
+No installer is checked in. The tests build every file they read: MSIs through
+the Windows Installer COM API, EXEs as hand-assembled PE headers with a
+manifest resource, and `.intunewin` packages as ZIP archives holding a
+`Detection.xml`. They run under Windows PowerShell 5.1 and PowerShell 7, and
+are skipped on other platforms.
