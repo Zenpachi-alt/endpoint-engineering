@@ -26,7 +26,8 @@ with the payload, detection logic, and documentation that belong to it.
 | `Graph/Configuration/` | Backup and reporting over Intune configuration objects. |
 | `Graph/Devices/` | Managed device reporting and inventory, and cleanup of stale Entra device objects. |
 | `Graph/Groups/` | Group membership changes: resolving device names to object IDs and adding them to groups. |
-| `Standalone/` | Scripts that run on their own: text and log handling, installer inspection, local diagnostics, one-off utilities. No Intune delivery, no Graph. |
+| `Standalone/` | Scripts that run on their own: text and log handling, local diagnostics, one-off utilities. No Intune delivery, no Graph. |
+| `Standalone/Packaging/` | Preparing Intune Win32 apps: what an installer holds, and what it writes when it runs. |
 
 Folders are created by the first file that belongs in them, so not every path
 above exists yet.
@@ -61,7 +62,8 @@ If a script fits none of these, that is worth a pause rather than a new folder.
 | Intune / Windows / Remediations | [`BitLockerKeyEscrow/`](Intune/Windows/Remediations/BitLockerKeyEscrow/) | Finds BitLocker recovery passwords with no evidence of backup to Entra ID, and backs them up, confirmed by Windows' own event. Never reads a password. |
 | Intune / Windows / Remediations | [`ComponentRepairSource/`](Intune/Windows/Remediations/ComponentRepairSource/) | Detection only: where DISM would get repair files on each device, listing the devices where it has none. |
 | Intune / Windows / Remediations | [`SystemFileHealth/`](Intune/Windows/Remediations/SystemFileHealth/) | Finds and repairs corrupt system files: SFC, and DISM only when SFC cannot finish. TimeGuard limits the heavy scans. |
-| Standalone | [`Get-InstallerInfo.ps1`](Standalone/Get-InstallerInfo.ps1) | Reads what an Intune Win32 app needs from an MSI, an EXE installer or an `.intunewin` package: codes, install context, silent switches, and suggested commands and detection. |
+| Standalone / Packaging | [`Get-InstallerInfo.ps1`](Standalone/Packaging/Get-InstallerInfo.ps1) | Reads what an Intune Win32 app needs from an MSI, an EXE installer or an `.intunewin` package: codes, install context, silent switches, and suggested commands and detection. |
+| Standalone / Packaging | [`Get-UninstallEntry.ps1`](Standalone/Packaging/Get-UninstallEntry.ps1) | Reads the Uninstall registry entries, compares them before and after a test install, and suggests the Intune detection rule, uninstall command and install behavior for each. |
 | Standalone | [`Invoke-TextScrub.ps1`](Standalone/Invoke-TextScrub.ps1) | Shares only what the reader needs: replaces identifiers in logs and text with consistent placeholders, and restores them. |
 
 ## Working in this repo
@@ -81,7 +83,7 @@ If a script fits none of these, that is worth a pause rather than a new folder.
 .\Tools\Invoke-RepositoryCheck.ps1 -Check Analyzer, Scan
 
 # One script's tests while working on it.
-Invoke-Pester -Path .\Standalone\Get-InstallerInfo.Tests.ps1 -Output Detailed
+Invoke-Pester -Path .\Standalone\Packaging\Get-InstallerInfo.Tests.ps1 -Output Detailed
 ```
 
 New work starts from a template — `Templates/Script-Template.ps1` for tooling

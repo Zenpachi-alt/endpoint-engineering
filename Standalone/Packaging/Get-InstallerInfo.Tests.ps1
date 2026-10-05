@@ -24,7 +24,7 @@
     skipped.
 
 .EXAMPLE
-    Invoke-Pester -Path .\Standalone\Get-InstallerInfo.Tests.ps1 -Output Detailed
+    Invoke-Pester -Path .\Standalone\Packaging\Get-InstallerInfo.Tests.ps1 -Output Detailed
 
 .NOTES
     PowerShell    : 5.1 or later, matching the script under test. Runs under
