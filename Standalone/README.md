@@ -248,6 +248,10 @@ inside it. The script reads only the identifying fields and never outputs the
 key. It refuses an XML file that declares a DTD, because a package can come
 from anywhere.
 
+The field names were checked against packages built by version 1.8.7 of the
+Content Prep Tool. If a later version renames one, that property comes back
+empty rather than failing.
+
 ### Warnings
 
 These are written as warnings and kept in `Notes`, because each one makes a

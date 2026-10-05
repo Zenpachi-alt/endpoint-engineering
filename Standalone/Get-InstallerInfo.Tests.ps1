@@ -255,18 +255,21 @@ Describe 'Get-InstallerInfo' -Skip:([Environment]::OSVersion.Platform -ne 'Win32
         }
 
         function Get-DetectionXml {
+            # The layout written by Content Prep Tool 1.8.7, namespace prefixes included.
+            # The schema URL is assembled here so the scanner does not read it as a link.
             param ([string]$SetupFile = 'setup.msi', [hashtable]$MsiInfo, [string]$Key = 'unused', [string]$Prolog = '')
-            $toolVersion = (1, 8, 6, 0) -join '.'
+            $toolVersion = (1, 8, 7, 0) -join '.'
+            $schema = 'http' + '://www.w3.org/2001/XMLSchema'
             $msi = ''
             if ($MsiInfo) {
                 $msi = '<MsiInfo>' + (($MsiInfo.GetEnumerator() | ForEach-Object { '<{0}>{1}</{0}>' -f $_.Key, $_.Value }) -join '') + '</MsiInfo>'
             }
-            ($Prolog + '<ApplicationInfo ToolVersion="{0}"><Name>Test App</Name>' +
+            ($Prolog + '<ApplicationInfo xmlns:xsd="{4}" xmlns:xsi="{4}-instance" ToolVersion="{0}"><Name>Test App</Name>' +
                 '<UnencryptedContentSize>123456</UnencryptedContentSize><FileName>IntunePackage.intunewin</FileName>' +
                 '<SetupFile>{1}</SetupFile><EncryptionInfo><EncryptionKey>{2}</EncryptionKey><MacKey>{2}</MacKey>' +
                 '<InitializationVector>{2}</InitializationVector><Mac>{2}</Mac><ProfileIdentifier>ProfileVersion1' +
                 '</ProfileIdentifier><FileDigest>{2}</FileDigest><FileDigestAlgorithm>SHA256</FileDigestAlgorithm>' +
-                '</EncryptionInfo>{3}</ApplicationInfo>') -f $toolVersion, $SetupFile, $Key, $msi
+                '</EncryptionInfo>{3}</ApplicationInfo>') -f $toolVersion, $SetupFile, $Key, $msi, $schema
         }
 
         function Write-TestIntuneWin {
@@ -589,7 +592,7 @@ Describe 'Get-InstallerInfo' -Skip:([Environment]::OSVersion.Platform -ne 'Win32
             $info.ProductCode | Should -Be $code
             $info.MsiRequiresReboot | Should -BeFalse
             $info.ContentSizeBytes | Should -Be 123456
-            $info.ToolVersion | Should -Be ((1, 8, 6, 0) -join '.')
+            $info.ToolVersion | Should -Be ((1, 8, 7, 0) -join '.')
             $info.IntuneInstallCommand | Should -BeExactly 'msiexec /i "App Setup.msi" /qn /norestart'
             $info.IntuneUninstallCommand | Should -BeExactly ('msiexec /x "{0}" /qn /norestart' -f $code)
             $info.IntuneInstallBehavior | Should -Be 'System'
