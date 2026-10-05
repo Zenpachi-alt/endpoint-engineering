@@ -24,7 +24,9 @@ outside my organisation.
   file from the repository. A launcher beside its own script, such as the
   Autopilot `.cmd`, is part of that unit rather than a dependency. Code that
   several scripts need is copied into each of them and kept identical by a
-  test, never loaded from a shared file at run time.
+  test, never loaded from a shared file at run time. The one exception is
+  `Tools/Invoke-RepositoryCheck.ps1`, which exists to run this repository's
+  own scanner and tests, and so runs only inside a clone.
 - **`Standalone/` is not a junk drawer.** A script goes there because it is
   genuinely self-contained, not because deciding was hard. Anything that would
   be delivered through Intune or would talk to Graph belongs in the folder that
@@ -158,28 +160,31 @@ script genuinely needs it rather than writing 5.1-compatible code out of habit.
 
 1. `Tools/Install-GitHook.ps1` once per clone — the pre-commit hook runs the
    identifier and secret scan against staged content.
-2. `Tools/Test-SensitiveContent.ps1` to check the working tree by hand. Findings
-   are masked by default; `-ShowMatch` shows the values locally.
-3. `Invoke-ScriptAnalyzer -Path . -Recurse -Settings .\PSScriptAnalyzerSettings.psd1`
-   — CI fails on ParseError, Error and Warning.
-4. `Invoke-Pester -Path .` when a script has tests (`<Script>.Tests.ps1` beside
-   it). Build identifier-shaped test values at run time so the test file passes
-   the scanner too. The tests of a script that declares `#Requires -Version 5.1`
-   declare it too, and must pass under `powershell.exe` as well as `pwsh`.
-   Windows PowerShell has its own module path, so it needs its own Pester 5.5
-   or later.
+2. `Tools/Invoke-RepositoryCheck.ps1` under `pwsh` on Windows — every check CI
+   runs, the same way CI runs it: PSScriptAnalyzer (CI fails on ParseError,
+   Error and Warning), Windows PowerShell 5.1 compatibility, the identifier and
+   secret scan, folder READMEs, and Pester, then the 5.1 parser and the 5.1
+   tests in `powershell.exe`. `-Check` runs a subset. The first run in each
+   edition needs `-InstallModule`, because Windows PowerShell and PowerShell 7
+   keep separate modules.
 
-CI (`.github/workflows/ci.yml`) repeats all four on every push and pull
-request, and additionally checks every script that declares
-`#Requires -Version 5.1` against Windows PowerShell, both with
-`PSScriptAnalyzerSettings.WindowsPowerShell.psd1` and with the 5.1 parser on a
-Windows runner. The tests of those scripts, which declare 5.1 too, also run
-there under Windows PowerShell 5.1. The hook is a convenience; CI is the gate.
+When a script has tests (`<Script>.Tests.ps1` beside it), build
+identifier-shaped test values at run time so the test file passes the scanner
+too. The tests of a script that declares `#Requires -Version 5.1` declare it
+too, and must pass under `powershell.exe` as well as `pwsh`. Pester runs them
+with `$ErrorActionPreference = 'Stop'`, as GitHub's PowerShell shells start
+every CI step, so a test must not depend on a gentler preference.
 
-CI pins every tool it installs: module versions in the `env` block at the top of
-`ci.yml`, actions by commit SHA with the release in a comment. Never loosen a
-pin to a minimum version or a moving tag. Raise a module version only after the
-checks pass locally against it.
+CI (`.github/workflows/ci.yml`) runs the same script, one check per step and
+every step even after one fails: on Linux under PowerShell 7, and on Windows
+under Windows PowerShell 5.1 and PowerShell 7. Tests of Windows-only scripts
+skip on Linux, so the Windows run under PowerShell 7 is their only one there.
+The hook is a convenience; CI is the gate.
+
+CI pins every tool it installs: module versions in `$PinnedModule` in
+`Tools/Invoke-RepositoryCheck.ps1`, actions by commit SHA with the release in a
+comment. Never loosen a pin to a minimum version or a moving tag. Raise a
+module version only after the checks pass locally against it.
 
 The scanner matches shapes, not meaning. Design-level identifiers that survive
 scrubbing — distinctive policy, app, group or script names, naming conventions,
