@@ -1099,51 +1099,75 @@ namespace EndpointEngineering.InstallerInfo
     }
 
     #endregion
+
+    function Read-InstallerTarget {
+        # Resolves each path and reads every file it names. Exactly one of the two is set,
+        # depending on the parameter set the caller used.
+        [CmdletBinding()]
+        [OutputType([pscustomobject])]
+        param (
+            [Parameter()] [AllowNull()] [string[]]$Path,
+            [Parameter()] [AllowNull()] [string[]]$LiteralPath
+        )
+
+        $selectors = if ($LiteralPath) {
+            @($LiteralPath | ForEach-Object { @{ LiteralPath = $_ } })
+        }
+        else {
+            @($Path | ForEach-Object { @{ Path = $_ } })
+        }
+
+        foreach ($selector in $selectors) {
+            $label = @($selector.Values)[0]
+            try {
+                $items = @(Get-Item @selector -Force -ErrorAction Stop)
+            }
+            catch {
+                Write-FileError -Target $label -Message (Get-ErrorText -ErrorRecord $_)
+                continue
+            }
+            if ($items.Count -eq 0) {
+                Write-FileError -Target $label -Message 'No file matches.'
+                continue
+            }
+
+            foreach ($item in $items) {
+                if ($item.PSIsContainer) {
+                    Write-FileError -Target $item.FullName -Message (
+                        'This is a folder. Pipe Get-ChildItem -File into the script to read the installers in it.')
+                    continue
+                }
+                try {
+                    switch (Get-InstallerKind -File $item) {
+                        'Msi' { Read-MsiPackage -File $item }
+                        'Exe' { Read-ExeInstaller -File $item }
+                        'IntuneWin' { Read-IntuneWinPackage -File $item }
+                    }
+                }
+                catch {
+                    Write-FileError -Target $item.FullName -Message (Get-ErrorText -ErrorRecord $_)
+                }
+            }
+        }
+    }
+
+    $Run.ProcessRan = $false
 }
 
 process {
-    $targets = if ($PSCmdlet.ParameterSetName -eq 'LiteralPath') {
-        @($LiteralPath | ForEach-Object { @{ LiteralPath = $_ } })
-    }
-    else {
-        @($Path | ForEach-Object { @{ Path = $_ } })
-    }
-
-    foreach ($target in $targets) {
-        $label = @($target.Values)[0]
-        try {
-            $items = @(Get-Item @target -Force -ErrorAction Stop)
-        }
-        catch {
-            Write-FileError -Target $label -Message (Get-ErrorText -ErrorRecord $_)
-            continue
-        }
-        if ($items.Count -eq 0) {
-            Write-FileError -Target $label -Message 'No file matches.'
-            continue
-        }
-
-        foreach ($item in $items) {
-            if ($item.PSIsContainer) {
-                Write-FileError -Target $item.FullName -Message (
-                    'This is a folder. Pipe Get-ChildItem -File into the script to read the installers in it.')
-                continue
-            }
-            try {
-                switch (Get-InstallerKind -File $item) {
-                    'Msi' { Read-MsiPackage -File $item }
-                    'Exe' { Read-ExeInstaller -File $item }
-                    'IntuneWin' { Read-IntuneWinPackage -File $item }
-                }
-            }
-            catch {
-                Write-FileError -Target $item.FullName -Message (Get-ErrorText -ErrorRecord $_)
-            }
-        }
-    }
+    $Run.ProcessRan = $true
+    Read-InstallerTarget -Path $Path -LiteralPath $LiteralPath
 }
 
 end {
+    # Started with -File while standard input is redirected, as automation usually starts it,
+    # PowerShell runs the script as if something were piped into it: process runs once per
+    # line of input, and never when there is none. The paths are bound all the same.
+    if (-not $Run.ProcessRan -and
+        ($PSBoundParameters.ContainsKey('Path') -or $PSBoundParameters.ContainsKey('LiteralPath'))) {
+        Read-InstallerTarget -Path $Path -LiteralPath $LiteralPath
+    }
+
     if ($Run.Failed -gt 0) { exit $ExitFailure }
     exit $ExitSuccess
 }

@@ -57,6 +57,27 @@ Describe 'Get-InstallerInfo' -Skip:([Environment]::OSVersion.Platform -ne 'Win32
             }
         }
 
+        function Invoke-AsFile {
+            # Starts the script as a file in a new PowerShell of the same edition, with standard
+            # input redirected from an empty file, as a scheduler or a CI step would.
+            param ([string[]]$Argument)
+            $folder = Get-TestFolder
+            $stdin = Join-Path -Path $folder -ChildPath 'stdin.txt'
+            $stdout = Join-Path -Path $folder -ChildPath 'stdout.txt'
+            $stderr = Join-Path -Path $folder -ChildPath 'stderr.txt'
+            [IO.File]::WriteAllText($stdin, '')
+            # Start-Process joins arguments with spaces and quotes none of them.
+            $quoted = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f $script:ScriptPath)) +
+            @($Argument | ForEach-Object { if ($_ -like '-*') { $_ } else { '"{0}"' -f $_ } })
+            $process = Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList $quoted -NoNewWindow -Wait -PassThru `
+                -RedirectStandardInput $stdin -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+            [pscustomobject]@{
+                ExitCode = $process.ExitCode
+                StdOut   = [IO.File]::ReadAllText($stdout)
+                StdErr   = [IO.File]::ReadAllText($stderr)
+            }
+        }
+
         function Get-TestFolder {
             $folder = Join-Path -Path $TestDrive -ChildPath ([guid]::NewGuid().ToString('n'))
             $null = New-Item -ItemType Directory -Path $folder
@@ -669,6 +690,31 @@ Describe 'Get-InstallerInfo' -Skip:([Environment]::OSVersion.Platform -ne 'Win32
             $result.ExitCode | Should -Be 1
             $result.Errors[0] | Should -Match 'Patches \(\.msp\)'
             $result.Errors[1] | Should -Match 'is a folder'
+        }
+
+        It 'reads its files when started with -File and empty standard input' {
+            # Automation starts scripts with standard input redirected. PowerShell then runs a
+            # script as if something were piped into it, and with nothing there it never runs
+            # the process block. The script must still read the paths it was given.
+            $exe = Write-TestExe
+
+            $result = Invoke-AsFile -Argument '-Path', $exe
+
+            $result.ExitCode | Should -Be 0
+            $result.StdOut | Should -Match 'FileType\s+:\s+Exe'
+        }
+
+        It 'returns exit code 1 to a caller that starts it with -File' {
+            # In-process tests read $LASTEXITCODE; this is what a scheduler or a pipeline sees.
+            $text = Join-Path -Path (Get-TestFolder) -ChildPath 'readme.txt'
+            Set-Content -LiteralPath $text -Value 'not an installer'
+
+            $result = Invoke-AsFile -Argument '-Path', $text
+
+            $result.ExitCode | Should -Be 1
+            # The child wraps its error view at the console width, gutter and all, anywhere in the
+            # message. Compared without whitespace or gutter, the wrapping cannot matter.
+            ($result.StdErr -replace '[\s|]', '') | Should -Match 'NotanMSI,anEXEoran\.intunewinpackage'
         }
 
         It 'stops with a clear message in Constrained Language Mode' {
