@@ -25,7 +25,7 @@ with the payload, detection logic, and documentation that belong to it.
 | `Graph/Autopilot/` | Registering and reporting on Windows Autopilot device identities. |
 | `Graph/Configuration/` | Backup and reporting over Intune configuration objects. |
 | `Graph/Devices/` | Managed device reporting and inventory. |
-| `Standalone/` | Scripts that run on their own: text and log handling, local diagnostics, one-off utilities. No Intune delivery, no Graph. |
+| `Standalone/` | Scripts that run on their own: text and log handling, installer inspection, local diagnostics, one-off utilities. No Intune delivery, no Graph. |
 
 Folders are created by the first file that belongs in them, so not every path
 above exists yet.
@@ -56,6 +56,7 @@ If a script fits none of these, that is worth a pause rather than a new folder.
 | Intune / Windows / Autopilot | [`Get-AutopilotHardwareHash.ps1`](Intune/Windows/Autopilot/Get-AutopilotHardwareHash.ps1) | Collects the Autopilot hardware hash on a device during OOBE, offline, with no modules. |
 | Intune / Windows / Remediations | [`ComponentRepairSource/`](Intune/Windows/Remediations/ComponentRepairSource/) | Detection only: where DISM would get repair files on each device, listing the devices where it has none. |
 | Intune / Windows / Remediations | [`SystemFileHealth/`](Intune/Windows/Remediations/SystemFileHealth/) | Finds and repairs corrupt system files: SFC, and DISM only when SFC cannot finish. TimeGuard limits the heavy scans. |
+| Standalone | [`Get-InstallerInfo.ps1`](Standalone/Get-InstallerInfo.ps1) | Reads what an Intune Win32 app needs from an MSI, an EXE installer or an `.intunewin` package: codes, install context, silent switches, and suggested commands and detection. |
 | Standalone | [`Invoke-TextScrub.ps1`](Standalone/Invoke-TextScrub.ps1) | Shares only what the reader needs: replaces identifiers in logs and text with consistent placeholders, and restores them. |
 
 ## Working in this repo
