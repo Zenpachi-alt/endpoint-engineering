@@ -69,7 +69,7 @@
 
 .NOTES
     Author        : Tomasz Pietryka
-    Version       : 1.0.0
+    Version       : 1.0.1
     Last updated  : 2026-10-05
 
     PowerShell    : 5.1 or later. Packaging is often done on a clean virtual
@@ -933,7 +933,8 @@ namespace EndpointEngineering.InstallerInfo
         }
         Add-InstallerNote -Note $notes -FileName $name -Message (
             'An EXE carries no product code. Install it on a test machine and base detection on what it writes, ' +
-            'such as DisplayVersion under the Uninstall registry key.')
+            'such as DisplayVersion under the Uninstall registry key: Get-UninstallEntry.ps1 compares those keys ' +
+            'before and after.')
         if ($image.Architecture -eq 'x86') {
             Add-InstallerNote -Note $notes -FileName $name -Message (
                 'The installer itself is 32-bit. That says nothing about the app it installs.')
