@@ -20,6 +20,7 @@ with the payload, detection logic, and documentation that belong to it.
 | `Tools/` | Repository maintenance: the script that runs every CI check, the identifier and secret scanner, and the git hook that runs the scan. |
 | `Intune/Windows/` | Artifacts that run on a device or are deployed to one: remediations, platform scripts, configuration profiles, applications, compliance policies. |
 | `Intune/Windows/Autopilot/` | Hardware hash handling, deployment profiles, Enrollment Status Page configuration. |
+| `Intune/Windows/PolicySource/` | Tracing a policy setting on the device to the GPO or MDM setting behind it. |
 | `Intune/Windows/Remediations/` | Remediation packages: a detection and remediation script pair per folder. |
 | `Graph/` | Admin-side tooling run from a workstation against a tenant through Microsoft Graph, whatever workload it touches. |
 | `Graph/Autopilot/` | Registering and reporting on Windows Autopilot device identities. |
@@ -59,6 +60,7 @@ If a script fits none of these, that is worth a pause rather than a new folder.
 | Graph / Devices | [`Remove-StaleEntraDevice.ps1`](Graph/Devices/Remove-StaleEntraDevice.ps1) | Finds stale Entra device objects, disables them, and deletes them after a grace period. One explicit stage per run, report by default; deletion cannot be undone. |
 | Graph / Groups | [`Add-GroupDeviceMember.ps1`](Graph/Groups/Add-GroupDeviceMember.ps1) | Resolves device names to Entra object IDs, filtered by join type and recent activity, and adds them to a group or writes the portal's bulk import CSV. |
 | Intune / Windows / Autopilot | [`Get-AutopilotHardwareHash.ps1`](Intune/Windows/Autopilot/Get-AutopilotHardwareHash.ps1) | Collects the Autopilot hardware hash on a device during OOBE, offline, with no modules. |
+| Intune / Windows / PolicySource | [`Get-PolicySource.ps1`](Intune/Windows/PolicySource/Get-PolicySource.ps1) | For each policy setting on a device: the GPO or MDM setting behind it, conflicts, and GPO settings Intune overrides that RSoP does not show. Offline, read-only. |
 | Intune / Windows / Remediations | [`BitLockerKeyEscrow/`](Intune/Windows/Remediations/BitLockerKeyEscrow/) | Finds BitLocker recovery passwords with no evidence of backup to Entra ID, and backs them up, confirmed by Windows' own event. Never reads a password. |
 | Intune / Windows / Remediations | [`ComponentRepairSource/`](Intune/Windows/Remediations/ComponentRepairSource/) | Detection only: where DISM would get repair files on each device, listing the devices where it has none. |
 | Intune / Windows / Remediations | [`SystemFileHealth/`](Intune/Windows/Remediations/SystemFileHealth/) | Finds and repairs corrupt system files: SFC, and DISM only when SFC cannot finish. TimeGuard limits the heavy scans. |
