@@ -750,10 +750,12 @@ function Get-AppliedGroupPolicy {
             if ($null -ne $state -and [bool]$state -ne $flag[1]) { $applied = $false }
         }
 
+        # A domain GPO's id is its directory path; the local GPO's is not. Only domain GPOs are cached.
         $gpos[$id] = [pscustomobject]@{
             Guid    = $guid.ToUpperInvariant()
             Name    = [string](Get-CimValue -Instance $gpo -Name 'name')
             Applied = $applied
+            Domain  = $id -like 'cn=*'
         }
     }
 
@@ -1105,7 +1107,8 @@ function Find-KeyClaim {
         if ($cut -lt 0) { break }
         $path = $path.Substring(0, $cut)
     }
-    return $null
+    # Nothing, not $null: the caller wraps the result in @(), and @($null) holds one item.
+    return
 }
 
 function ConvertTo-PolicySourceRow {
@@ -1470,9 +1473,9 @@ try {
     }
     $appliedGpo = @{}
     foreach ($gpo in $rsop.Gpo.Values) {
-        if ($gpo.Applied -and $gpo.Guid) { $appliedGpo[$gpo.Guid] = $gpo.Name }
+        if ($gpo.Applied -and $gpo.Domain -and $gpo.Guid) { $appliedGpo[$gpo.Guid] = $gpo.Name }
     }
-    Write-LogEntry -Message ('Applied registry policy entries: {0}; GPOs applied: {1}.' -f $rsop.Entry.Count, $appliedGpo.Count)
+    Write-LogEntry -Message ('Applied registry policy entries: {0}; domain GPOs applied: {1}.' -f $rsop.Entry.Count, $appliedGpo.Count)
 
     # The cache and the Preferences history add to RSoP; without them the run is still useful.
     Write-Progress -Activity 'Get-PolicySource' -Status 'Reading the GPO cache'

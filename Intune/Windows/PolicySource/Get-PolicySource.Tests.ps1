@@ -35,18 +35,34 @@
     Modules       : Pester 5.5.0 or later.
 #>
 
+BeforeDiscovery {
+    # Worked out here, where -Skip is read. The Windows identity API throws on
+    # Linux, even inside a Describe that is skipped there.
+    $script:IsElevated = $false
+    if ([Environment]::OSVersion.Platform -eq 'Win32NT') {
+        $script:IsElevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+            [Security.Principal.WindowsBuiltInRole]::Administrator)
+    }
+}
+
 Describe 'Get-PolicySource' -Skip:([Environment]::OSVersion.Platform -ne 'Win32NT') {
 
     BeforeAll {
         $script:ScriptPath = Join-Path -Path $PSScriptRoot -ChildPath 'Get-PolicySource.ps1'
 
         # Every top-level function of the script and the constants they read, without its main block.
+        # The script runs under Set-StrictMode -Version Latest, so each function gets it as its first
+        # statement here too: without strict mode, reading a property of $null passes silently in a
+        # test and stops the script on a device.
         $parseErrors = $null
         $syntaxTree = [System.Management.Automation.Language.Parser]::ParseFile($script:ScriptPath, [ref]$null, [ref]$parseErrors)
         if ($parseErrors) { throw "Get-PolicySource.ps1 does not parse: $($parseErrors[0].Message)" }
         foreach ($statement in $syntaxTree.EndBlock.Statements) {
             if ($statement -is [System.Management.Automation.Language.FunctionDefinitionAst]) {
-                . ([scriptblock]::Create($statement.Extent.Text))
+                $text = $statement.Extent.Text
+                $at = $statement.Body.ParamBlock.Extent.EndOffset - $statement.Extent.StartOffset
+                $text = $text.Substring(0, $at) + "`nSet-StrictMode -Version Latest`n" + $text.Substring($at)
+                . ([scriptblock]::Create($text))
             }
             elseif ($statement -is [System.Management.Automation.Language.AssignmentStatementAst] -and
                 $statement.Left.Extent.Text -match '^\$(PolicyManagerPath|PoliciesPath|VerdictRank)$') {
@@ -577,7 +593,7 @@ Describe 'Get-PolicySource' -Skip:([Environment]::OSVersion.Platform -ne 'Win32N
 
     Context 'Running the script' {
 
-        It 'stops unelevated with exit code 1 and says why' -Skip:(([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        It 'stops unelevated with exit code 1 and says why' -Skip:$script:IsElevated {
             # Continue, not the caller's Stop: Windows PowerShell 5.1 turns the
             # child's error output into a terminating error under Stop.
             $ErrorActionPreference = 'Continue'
@@ -591,7 +607,7 @@ Describe 'Get-PolicySource' -Skip:([Environment]::OSVersion.Platform -ne 'Win32N
             Join-Path -Path $TestDrive -ChildPath 'Get-PolicySource.log' | Should -FileContentMatch '\[ERROR\]'
         }
 
-        It 'finishes elevated with exit code 0' -Skip:(-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        It 'finishes elevated with exit code 0' -Skip:(-not $script:IsElevated) {
             $ErrorActionPreference = 'Continue'
             $powershell = Join-Path -Path $env:SystemRoot -ChildPath 'System32\WindowsPowerShell\v1.0\powershell.exe'
             $output = @(& $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script:ScriptPath -LogDirectory $TestDrive 2>&1)
