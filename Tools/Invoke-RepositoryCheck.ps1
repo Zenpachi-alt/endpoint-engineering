@@ -140,7 +140,7 @@ $ExitFailed = 1
 $PinnedModule = @{
     'PSScriptAnalyzer'               = [version]'1.25.0'
     'Pester'                         = [version]'6.2.0'
-    'Microsoft.Graph.Authentication' = [version]'2.40.0'
+    'Microsoft.Graph.Authentication' = [version]'2.41.0'
 }
 
 # The order checks run in: the quick ones first.
