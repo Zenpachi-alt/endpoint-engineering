@@ -43,14 +43,24 @@
         NotApplied       A GPO sets it, it was not applied, and no Intune
                          setting explains why.
         Both             Both set it. Intune sends an ADMX state (Enabled,
-                         Disabled) rather than a value, so the two are not
-                         compared.
+                         Disabled) rather than a value, so the GPO's value is
+                         compared with the one in the registry instead.
         Agree            Both set it, to the same value.
         GpOnly           Group Policy only.
         MdmOnly          Intune, or another MDM, only.
+        Leftover         PolicyManager still lists an MDM setting for it, but
+                         no enrollment holds a value, so no MDM applies it now:
+                         what remains when a policy is removed from the device,
+                         or, briefly, while an MDM re-applies its policies. Run
+                         again after a sync to tell which. Any registry value
+                         it wrote may have stayed behind.
         Unclaimed        A value under HKLM\SOFTWARE\Policies that none of the
                          sources claims: a script, an app, another management
                          tool, or a Windows default.
+
+    A value can be matched to an MDM setting by the value itself, or only by
+    its key, when an ADMX-backed setting writes several values under one key.
+    MatchedBy says which; a match by key is weaker evidence.
 
     Settings Windows provisions for itself through PolicyManager - power and
     processor tuning, mostly, hundreds of them - are left out unless
@@ -98,8 +108,8 @@
 
 .NOTES
     Author        : Tomasz Pietryka
-    Version       : 1.0.0
-    Last updated  : 2026-10-06
+    Version       : 1.1.0
+    Last updated  : 2026-10-07
 
     PowerShell    : Windows PowerShell 5.1. It runs on the device, where
                     PowerShell 7 cannot be assumed.
@@ -121,9 +131,12 @@
     Limits        : Computer settings only, not user settings. Registry-based
                     policy only: security settings (passwords, user rights,
                     audit) go through a separate engine and are not read.
-                    Values of ADMX-backed Intune settings are not compared
-                    with Group Policy values. A setting written by a script or
-                    an app is Unclaimed only under HKLM\SOFTWARE\Policies.
+                    An ADMX state is not translated into the value it means;
+                    the GPO's value is compared with the registry instead. A
+                    value matched by key names every ADMX setting that writes
+                    under the key, not the one that wrote it. A setting
+                    written by a script or an app is Unclaimed only under
+                    HKLM\SOFTWARE\Policies.
 
 .LINK
     https://learn.microsoft.com/windows/client-management/mdm/policy-csp-controlpolicyconflict
@@ -138,7 +151,7 @@ param (
     [string[]]$Filter,
 
     [Parameter()]
-    [ValidateSet('Conflict', 'OverriddenByMdm', 'NotApplied', 'Both', 'Agree', 'GpOnly', 'MdmOnly', 'Unclaimed')]
+    [ValidateSet('Conflict', 'OverriddenByMdm', 'NotApplied', 'Both', 'Agree', 'GpOnly', 'MdmOnly', 'Leftover', 'Unclaimed')]
     [string[]]$Verdict,
 
     [Parameter()]
@@ -166,7 +179,7 @@ $PreferencesHistoryDirectory = Join-Path -Path $env:ProgramData -ChildPath 'Micr
 
 # Verdicts in the order they are listed: the ones that need a decision first.
 $VerdictRank = @{
-    Conflict = 0; OverriddenByMdm = 1; NotApplied = 2; Both = 3; Agree = 4; GpOnly = 5; MdmOnly = 6; Unclaimed = 7
+    Conflict = 0; OverriddenByMdm = 1; NotApplied = 2; Both = 3; Agree = 4; GpOnly = 5; MdmOnly = 6; Leftover = 7; Unclaimed = 8
 }
 
 # Set by Initialize-LogFile. $null means "log to the verbose stream only".
@@ -643,6 +656,8 @@ function Get-MdmPolicy {
     }
     $admxIndex = Get-AdmxMetadataIndex -Root $Root
     $unknown = [pscustomobject]@{ Label = 'Unknown'; Kind = 'Other' }
+    $windows = [pscustomobject]@{ Label = 'Windows'; Kind = 'Windows' }
+    $nobody = [pscustomobject]@{ Label = 'None'; Kind = 'Leftover' }
 
     foreach ($area in $areas) {
         $values = Get-RegistryValueSet -Root $Root -Path "$PolicyManagerPath\current\device\$area"
@@ -656,9 +671,11 @@ function Get-MdmPolicy {
 
         $isBuiltIn = $builtIn.ContainsKey($area)
         foreach ($name in @($names.Keys)) {
-            # Metadata with a suffix not listed above is skipped, not taken for a setting.
+            # Metadata with a suffix not listed above is skipped, not taken for a setting, and so
+            # is the copy of a list setting's items PolicyManager keeps as <Policy>_<Element>_ListSet.
             $cut = $name.LastIndexOf('_')
             if ($cut -gt 0 -and $names.ContainsKey($name.Substring(0, $cut))) { continue }
+            if ($name -like '*_ListSet') { continue }
 
             $lookup = ('{0}|{1}' -f $area, $name).ToLowerInvariant()
             $metadata = $null
@@ -682,14 +699,23 @@ function Get-MdmPolicy {
                 }
             }
 
+            # knobs is Windows' own tuning whatever its record says. A setting with neither a
+            # winning enrollment nor a value is one no MDM applies any more: a leftover.
             $owner = $unknown
-            if ($winner -and $Source.ContainsKey($winner)) { $owner = $Source[$winner] }
+            $leftover = $false
+            if ($area -eq 'knobs') { $owner = $windows }
+            elseif ($winner -and $Source.ContainsKey($winner)) { $owner = $Source[$winner] }
+            elseif (-not $winner -and $null -eq $value) {
+                $owner = $nobody
+                $leftover = $true
+            }
 
             [pscustomobject]@{
                 Name          = "$area/$name"
                 Value         = $value
                 Source        = $owner.Label
                 SourceKind    = $owner.Kind
+                Leftover      = $leftover
                 AdmxBacked    = (-not $isBuiltIn) -or ($area -like 'ADMX_*') -or $metadata.ContainsKey('AdmxMetadataDevice') -or
                     $metadata.ContainsKey('AdmxMetadataBoth') -or $metadata.ContainsKey('AdmxMetadataUser')
                 RedirectKey   = [string]$metadata['RegKeyPathRedirect']
@@ -1135,6 +1161,7 @@ function ConvertTo-PolicySourceRow {
         MdmValue      = $Property['MdmValue']
         MdmSource     = $Property['MdmSource']
         MdmSourceKind = $Property['MdmSourceKind']
+        MatchedBy     = $Property['MatchedBy']
         RegistryPath  = $Property['RegistryPath']
         Note          = $Property['Note']
     }
@@ -1146,12 +1173,40 @@ function ConvertTo-PolicySourceRow {
     return $row
 }
 
+function Format-NameList {
+    <#
+        .SYNOPSIS
+            Up to three names, then how many more, so a note stays readable when
+            many settings write under one key.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param (
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [string[]]$Name
+    )
+
+    $unique = @($Name | Select-Object -Unique)
+    if ($unique.Count -le 3) { return ($unique -join ', ') }
+    return ('{0} and {1} more' -f ($unique[0..2] -join ', '), ($unique.Count - 3))
+}
+
 function Resolve-PolicySource {
     <#
         .SYNOPSIS
-            Puts every source side by side, one row per registry value, plus a
-            row for each MDM setting with no single registry value, and gives
-            each a verdict.
+            Puts every source side by side, one row per setting, and gives each
+            a verdict.
+
+        .DESCRIPTION
+            A row is a registry value, or an MDM setting with no single registry
+            value. An MDM setting that writes one value and blocks Group Policy at
+            another gets one row, the one with Group Policy in it.
+
+            A leftover - an MDM setting PolicyManager still lists, with no
+            enrollment holding a value - never counts as the source of a value.
+            It can explain a GPO setting that was not applied, or a value left
+            behind under its key.
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -1179,6 +1234,10 @@ function Resolve-PolicySource {
         [bool]$MdmWinsOverGp
     )
 
+    $leftoverNote = 'PolicyManager still lists it, but no enrollment holds a value for it, so no MDM applies it now. ' +
+    'That is what remains when a policy is removed from the device, and it can also show briefly while an MDM ' +
+    're-applies its policies: run again after a sync to tell which. Registry values it wrote can stay behind.'
+
     $locations = @{}
     foreach ($entry in $GpApplied) { (Get-PolicyLocation -Table $locations -Key $entry.Key -ValueName $entry.ValueName).Applied.Add($entry) }
     foreach ($entry in $GpCached) { (Get-PolicyLocation -Table $locations -Key $entry.Key -ValueName $entry.ValueName).Cached.Add($entry) }
@@ -1190,6 +1249,7 @@ function Resolve-PolicySource {
     # Each MDM setting goes to the registry value it writes. The value MDMWinsOverGP
     # blocks is used too, but only where Group Policy has something there.
     $claims = @{}
+    $leftoverClaims = @{}
     $unplaced = [System.Collections.Generic.List[object]]::new()
     foreach ($policy in $Mdm) {
         $placed = $false
@@ -1209,9 +1269,10 @@ function Resolve-PolicySource {
             }
         }
         if ($policy.AdmxBacked -and $policy.RedirectKey) {
+            $table = if ($policy.Leftover) { $leftoverClaims } else { $claims }
             $claimKey = (Get-KeyPath -Key $policy.RedirectKey).ToLowerInvariant()
-            if (-not $claims.ContainsKey($claimKey)) { $claims[$claimKey] = [System.Collections.Generic.List[object]]::new() }
-            $claims[$claimKey].Add($policy)
+            if (-not $table.ContainsKey($claimKey)) { $table[$claimKey] = [System.Collections.Generic.List[object]]::new() }
+            $table[$claimKey].Add($policy)
         }
         if (-not $placed) { $unplaced.Add($policy) }
     }
@@ -1222,13 +1283,15 @@ function Resolve-PolicySource {
     }
 
     $switchState = if ($MdmWinsOverGp) { 'on' } else { 'off' }
+    $results = [System.Collections.Generic.List[object]]::new()
     foreach ($location in $locations.Values) {
         $live = Get-LiveValue -Root $Root -Key $location.Key -Name $location.ValueName
         $applied = @($location.Applied | Sort-Object -Property Precedence)
         $cached = $location.Cached.ToArray()
         $preferred = $location.Preferred.ToArray()
         # An external MDM before Windows' own provisioning, when both write one value.
-        $mdmPolicies = @($location.Mdm | Sort-Object -Property { $_.SourceKind -eq 'Windows' })
+        $active = @($location.Mdm | Where-Object { -not $_.Leftover } | Sort-Object -Property { $_.SourceKind -eq 'Windows' })
+        $leftovers = @($location.Mdm | Where-Object { $_.Leftover })
         $notes = [System.Collections.Generic.List[string]]::new()
 
         $gpValue = $null; $gpo = $null; $gpSource = $null; $overridden = $null
@@ -1251,11 +1314,19 @@ function Resolve-PolicySource {
         }
         $gpApplies = $applied.Count -gt 0 -or $preferred.Count -gt 0
 
+        # When the MDM sends an ADMX state, the value it put in the registry is the one to
+        # compare a GPO's value with.
+        $againstLive = 'the registry does not hold the value'
+        if ($null -ne $live) {
+            if ($live -eq $gpValue) { $againstLive = 'the GPO wants the value the registry holds' }
+            else { $againstLive = ('the GPO wants {0}, the registry holds {1}' -f $gpValue, $live) }
+        }
+
         $policy = $null
-        if ($mdmPolicies.Count -gt 0) {
-            $policy = $mdmPolicies[0]
-            if ($mdmPolicies.Count -gt 1) {
-                $notes.Add(('{0} MDM settings write this value: {1}.' -f $mdmPolicies.Count, (@($mdmPolicies | ForEach-Object { $_.Name }) -join ', ')))
+        if ($active.Count -gt 0) {
+            $policy = $active[0]
+            if ($active.Count -gt 1) {
+                $notes.Add(('{0} MDM settings write this value: {1}.' -f $active.Count, (Format-NameList -Name ($active | ForEach-Object { $_.Name }))))
             }
         }
         $mdmValue = $null
@@ -1265,14 +1336,17 @@ function Resolve-PolicySource {
             $admx = Test-AdmxState -Value $policy.Value
         }
         $claimants = @(Find-KeyClaim -Claim $claims -Key $location.Key)
-        $keyClaim = $null
-        if ($claimants.Count -gt 0) { $keyClaim = (@($claimants | ForEach-Object { $_.Name }) -join '; ') }
+        $oldClaimants = @(Find-KeyClaim -Claim $leftoverClaims -Key $location.Key)
+        # Whatever explains the row when no active MDM setting writes the value.
+        $explainedBy = @()
+        $matchedBy = $null
 
         if ($null -ne $policy) {
+            $matchedBy = 'Value'
             if ($gpApplies) {
                 if ($admx) {
                     $verdict = 'Both'
-                    $notes.Add('Intune sends an ADMX state, not a value, so the two are not compared.')
+                    $notes.Add(('The MDM sends an ADMX state, not a value; {0}.' -f $againstLive))
                 }
                 elseif ($gpValue -eq $policy.Value) {
                     $verdict = 'Agree'
@@ -1287,7 +1361,7 @@ function Resolve-PolicySource {
             }
             elseif ($cached.Count -gt 0) {
                 $verdict = 'OverriddenByMdm'
-                $comparison = if ($admx) { 'Intune sends an ADMX state, so the values are not compared' }
+                $comparison = if ($admx) { $againstLive }
                 elseif ($gpValue -eq $policy.Value) { 'both set the same value' }
                 else { 'the values differ' }
                 $notes.Add(('The GPO sets it, but {0} does and Group Policy did not apply it; {1}. MDMWinsOverGP is {2}.' -f
@@ -1305,13 +1379,27 @@ function Resolve-PolicySource {
             if ($null -ne $live -and $live -ne $gpValue) {
                 $notes.Add('The registry holds a different value: something wrote it after Group Policy did.')
             }
-            if ($keyClaim) { $notes.Add(('Intune ADMX settings also write under this key: {0}.' -f $keyClaim)) }
+            if ($claimants.Count -gt 0) {
+                $notes.Add(('MDM ADMX settings also write under this key: {0}.' -f (Format-NameList -Name ($claimants | ForEach-Object { $_.Name }))))
+            }
+            if ($leftovers.Count -gt 0) {
+                $notes.Add(('PolicyManager also lists {0} for this value, but no MDM applies it now.' -f (Format-NameList -Name ($leftovers | ForEach-Object { $_.Name }))))
+            }
         }
         elseif ($cached.Count -gt 0) {
-            if ($keyClaim) {
+            if ($claimants.Count -gt 0) {
                 $verdict = 'OverriddenByMdm'
-                $notes.Add(('The GPO sets it, but Group Policy did not apply it; Intune ADMX settings write under this key: {0}. MDMWinsOverGP is {1}.' -f
-                        $keyClaim, $switchState))
+                $matchedBy = 'Key'
+                $explainedBy = $claimants
+                $notes.Add(('The GPO sets it, but Group Policy did not apply it; {0}. Matched by key only: MDM ADMX settings write under this key, which is weaker evidence than a match on the value. MDMWinsOverGP is {1}.' -f
+                        $againstLive, $switchState))
+            }
+            elseif ($leftovers.Count -gt 0 -or $oldClaimants.Count -gt 0) {
+                $verdict = 'NotApplied'
+                $matchedBy = if ($leftovers.Count -gt 0) { 'Value' } else { 'Key' }
+                $explainedBy = @(if ($leftovers.Count -gt 0) { $leftovers } else { $oldClaimants })
+                $notes.Add(('The GPO sets it, but Group Policy did not apply it. PolicyManager still lists an MDM setting for it that no MDM applies any more; MDMWinsOverGP is {0}, and a leftover like this can still keep the GPO setting from applying.' -f
+                        $switchState))
             }
             else {
                 $verdict = 'NotApplied'
@@ -1323,9 +1411,22 @@ function Resolve-PolicySource {
             $gpSource = 'Wireless profile'
             $notes.Add('Written by the Wireless Group Policy extension, which RSoP does not list value by value.')
         }
-        elseif ($keyClaim) {
+        elseif ($claimants.Count -gt 0) {
             $verdict = 'MdmOnly'
-            $notes.Add(('A value of an Intune ADMX setting that writes under this key: {0}.' -f $keyClaim))
+            $matchedBy = 'Key'
+            $explainedBy = $claimants
+            if ($claimants.Count -gt 1) {
+                $notes.Add(('Matched by key only: one of the {0} MDM ADMX settings in MdmSetting writes under this key.' -f $claimants.Count))
+            }
+            else {
+                $notes.Add('Matched by key only: the MDM ADMX setting in MdmSetting writes under this key.')
+            }
+        }
+        elseif ($leftovers.Count -gt 0 -or $oldClaimants.Count -gt 0) {
+            $verdict = 'Leftover'
+            $matchedBy = if ($leftovers.Count -gt 0) { 'Value' } else { 'Key' }
+            $explainedBy = @(if ($leftovers.Count -gt 0) { $leftovers } else { $oldClaimants })
+            $notes.Add($leftoverNote)
         }
         else {
             $verdict = 'Unclaimed'
@@ -1335,21 +1436,21 @@ function Resolve-PolicySource {
         $valueLabel = if ($location.ValueName) { $location.ValueName } else { '(Default)' }
         $setting = "$($location.Key)\$valueLabel"
         if ($null -ne $policy) { $setting = $policy.Name }
+        elseif ($leftovers.Count -eq 1 -and $verdict -eq 'Leftover') { $setting = $leftovers[0].Name }
 
-        # A value matched to MDM only through its key is credited to the setting that writes the key.
         $mdmSetting = $null; $mdmSource = $null; $mdmSourceKind = $null
         if ($null -ne $policy) {
-            $mdmSetting = (@($mdmPolicies | ForEach-Object { $_.Name }) -join '; ')
+            $mdmSetting = (@($active | ForEach-Object { $_.Name }) -join '; ')
             $mdmSource = $policy.Source
             $mdmSourceKind = $policy.SourceKind
         }
-        elseif ($claimants.Count -gt 0 -and $verdict -in 'MdmOnly', 'OverriddenByMdm') {
-            $mdmSetting = $keyClaim
-            $mdmSource = $claimants[0].Source
-            $mdmSourceKind = $claimants[0].SourceKind
+        elseif ($explainedBy.Count -gt 0) {
+            $mdmSetting = (@($explainedBy | ForEach-Object { $_.Name } | Select-Object -Unique) -join '; ')
+            $mdmSource = $explainedBy[0].Source
+            $mdmSourceKind = $explainedBy[0].SourceKind
         }
 
-        ConvertTo-PolicySourceRow -Property @{
+        $row = ConvertTo-PolicySourceRow -Property @{
             Verdict       = $verdict
             Setting       = $setting
             LiveValue     = $live
@@ -1361,9 +1462,36 @@ function Resolve-PolicySource {
             MdmValue      = $mdmValue
             MdmSource     = $mdmSource
             MdmSourceKind = $mdmSourceKind
+            MatchedBy     = $matchedBy
             RegistryPath  = "HKLM\$($location.Key)\$valueLabel"
             Note          = $(if ($notes.Count -gt 0) { $notes -join ' ' } else { $null })
         }
+        $results.Add([pscustomobject]@{
+                Row      = $row
+                Policies = @(@($active) + @($leftovers) | ForEach-Object { $_.Name })
+                HasGp    = ($applied.Count + $cached.Count + $preferred.Count) -gt 0
+            })
+    }
+
+    # One setting, one row: a setting that writes one value and blocks Group Policy at
+    # another keeps the row with Group Policy in it, and that row's note says where the
+    # MDM's own value is.
+    $withGp = @{}
+    foreach ($result in $results) {
+        if ($result.HasGp) { foreach ($name in $result.Policies) { $withGp[$name] = $result } }
+    }
+    $merged = @{}
+    foreach ($result in $results) {
+        if (-not $result.HasGp -and $result.Policies.Count -eq 1 -and $withGp.ContainsKey($result.Policies[0])) {
+            $kept = $withGp[$result.Policies[0]].Row
+            $shown = if ($null -ne $result.Row.LiveValue) { $result.Row.LiveValue } else { 'not set' }
+            $where = 'The MDM writes its own value to {0}: {1}.' -f $result.Row.RegistryPath, $shown
+            $kept.Note = if ($kept.Note) { "$($kept.Note) $where" } else { $where }
+            $merged[$result.Row.RegistryPath] = $true
+        }
+    }
+    foreach ($result in $results) {
+        if (-not $merged.ContainsKey($result.Row.RegistryPath)) { $result.Row }
     }
 
     foreach ($policy in $unplaced) {
@@ -1378,9 +1506,10 @@ function Resolve-PolicySource {
         else {
             $note = 'No registry value: Windows reads this setting from PolicyManager.'
         }
+        if ($policy.Leftover) { $note = "$leftoverNote $note" }
 
         ConvertTo-PolicySourceRow -Property @{
-            Verdict       = 'MdmOnly'
+            Verdict       = $(if ($policy.Leftover) { 'Leftover' } else { 'MdmOnly' })
             Setting       = $policy.Name
             MdmSetting    = $policy.Name
             MdmValue      = Format-MdmValue -Value $policy.Value
