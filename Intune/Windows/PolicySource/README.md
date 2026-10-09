@@ -203,6 +203,9 @@ and the filters. They run under Windows PowerShell 5.1 and PowerShell 7. The
 script itself is run as a file: unelevated it stops at the elevation check with
 `1`, and elevated, as in CI, it must finish with `0`.
 
+It has been run on a hybrid-joined, Intune-enrolled device, and the verdicts
+held.
+
 Not yet exercised: the verdicts against a deliberately conflicting GPO and
 Intune policy, and a device with `MDMWinsOverGP` off.
 
