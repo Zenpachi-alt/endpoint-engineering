@@ -102,7 +102,7 @@ Describe 'Get-PolicySource' -Skip:([Environment]::OSVersion.Platform -ne 'Win32N
             # An MDM setting as Get-MdmPolicy returns it, with any property replaced.
             param ([hashtable]$Property = @{})
             $policy = [ordered]@{
-                Name = 'Area/Setting'; Value = '1'; Source = 'Intune'; SourceKind = 'Intune'; AdmxBacked = $false
+                Name = 'Area/Setting'; Value = '1'; Source = 'Intune'; SourceKind = 'Intune'; Leftover = $false; AdmxBacked = $false
                 RedirectKey = ''; RedirectValue = ''; BlockKey = ''; BlockValue = ''
             }
             foreach ($name in $Property.Keys) { $policy[$name] = $Property[$name] }
@@ -406,6 +406,46 @@ Describe 'Get-PolicySource' -Skip:([Environment]::OSVersion.Platform -ne 'Win32N
             ($script:Policies | Where-Object Name -EQ 'Other/Orphan').Source | Should -Be 'Unknown'
         }
 
+        It 'skips the copy of a list setting PolicyManager keeps beside it' {
+            $pm = 'SOFTWARE\Microsoft\PolicyManager'
+            Write-TestValue -Path "$pm\default\Defender\AsrRules" -Value @{ Behavior = 1 }
+            Write-TestValue -Path "$pm\current\device\Defender" -Value @{
+                AsrRules = '<enabled/>'; AsrRules_WinningProvider = $script:Intune; AsrRules_AsrRulesList_ListSet = 'x'
+            }
+            $names = @(Get-MdmPolicy -Root $script:Root -Source (Get-EnrollmentSource -Root $script:Root)).Name
+
+            $names | Should -Contain 'Defender/AsrRules'
+            @($names | Where-Object { $_ -like '*ListSet' }).Count | Should -Be 0
+        }
+
+        It 'credits knobs to Windows even when PolicyManager records no winner' {
+            $pm = 'SOFTWARE\Microsoft\PolicyManager'
+            Write-TestValue -Path "$pm\default\knobs\Power/Orphaned" -Value @{ Behavior = 1 }
+            Write-TestValue -Path "$pm\current\device\knobs" -Value @{ 'Power/Orphaned_ProviderSet' = '' }
+            $knob = @(Get-MdmPolicy -Root $script:Root -Source (Get-EnrollmentSource -Root $script:Root)) |
+                Where-Object Name -EQ 'knobs/Power/Orphaned'
+
+            $knob.SourceKind | Should -Be 'Windows'
+            $knob.Leftover | Should -BeFalse
+        }
+
+        It 'marks a setting with neither a winning enrollment nor a value as a leftover, but not one with a value' {
+            $pm = 'SOFTWARE\Microsoft\PolicyManager'
+            Write-TestValue -Path "$pm\default\Storage\Gone" -Value @{ Behavior = 1 }
+            Write-TestValue -Path "$pm\current\device\Storage" -Value @{ Gone_ProviderSet = '' }
+            $policies = @(Get-MdmPolicy -Root $script:Root -Source (Get-EnrollmentSource -Root $script:Root))
+
+            $gone = $policies | Where-Object Name -EQ 'Storage/Gone'
+            $gone.Leftover | Should -BeTrue
+            $gone.Source | Should -Be 'None'
+            $gone.SourceKind | Should -Be 'Leftover'
+            $gone.Value | Should -BeNullOrEmpty
+
+            $orphan = $policies | Where-Object Name -EQ 'Other/Orphan'
+            $orphan.Leftover | Should -BeFalse
+            $orphan.Source | Should -Be 'Unknown'
+        }
+
         It 'gives nothing on a device without MDM policy' {
             $script:Root.DeleteSubKeyTree('SOFTWARE\Microsoft\PolicyManager')
             @(Get-MdmPolicy -Root $script:Root -Source @{}).Count | Should -Be 0
@@ -555,6 +595,100 @@ Describe 'Get-PolicySource' -Skip:([Environment]::OSVersion.Platform -ne 'Win32N
             $rows[0].Note | Should -BeLike '*2 MDM settings write this value*'
         }
 
+        It 'Leftover for values a removed MDM setting left behind, matched by value or by key' {
+            Write-TestValue -Path 'SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Value @{ DisablePasswordSaving = 1; SecurityLayer = 2 }
+            $rows = Invoke-Resolve -Mdm @(
+                Get-TestPolicy @{
+                    Name = 'RemoteDesktopServices/DoNotAllowPasswordSaving'; Value = $null; Source = 'None'; SourceKind = 'Leftover'; Leftover = $true
+                    RedirectKey = 'SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'; RedirectValue = 'DisablePasswordSaving'
+                }
+                Get-TestPolicy @{
+                    Name = 'ADMX_TerminalServer/TS_SECURITY_LAYER_POLICY'; Value = $null; Source = 'None'; SourceKind = 'Leftover'; Leftover = $true
+                    AdmxBacked = $true; RedirectKey = 'SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
+                }
+            )
+
+            @($rows | Where-Object Verdict -NE 'Leftover').Count | Should -Be 0
+            $byValue = $rows | Where-Object RegistryPath -Like '*\DisablePasswordSaving'
+            $byValue.Setting | Should -Be 'RemoteDesktopServices/DoNotAllowPasswordSaving'
+            $byValue.LiveValue | Should -Be '1'
+            $byValue.MatchedBy | Should -Be 'Value'
+            $byValue.MdmSource | Should -Be 'None'
+            $byKey = $rows | Where-Object RegistryPath -Like '*\SecurityLayer'
+            $byKey.MatchedBy | Should -Be 'Key'
+            $byKey.MdmSetting | Should -Be 'ADMX_TerminalServer/TS_SECURITY_LAYER_POLICY'
+            ($rows | Where-Object Setting -EQ 'ADMX_TerminalServer/TS_SECURITY_LAYER_POLICY' | Where-Object { -not $_.LiveValue }).Note |
+                Should -BeLike '*no MDM applies it now*'
+        }
+
+        It 'never takes a leftover for the source of a value' {
+            Write-TestValue -Path 'SOFTWARE\Policies\Microsoft\Storage' -Value @{ Redirected = 5 }
+            $rows = Invoke-Resolve -Mdm @(Get-TestPolicy @{
+                    Name = 'Storage/Redirected'; Value = $null; Source = 'None'; SourceKind = 'Leftover'; Leftover = $true
+                    RedirectKey = 'SOFTWARE\Policies\Microsoft\Storage'; RedirectValue = 'Redirected'
+                }) -Applied @(Get-TestGpEntry -Key 'Software\Policies\Microsoft\Storage' -ValueName 'Redirected' -Value '5')
+
+            $rows.Count | Should -Be 1
+            $rows[0].Verdict | Should -Be 'GpOnly'
+            $rows[0].Note | Should -BeLike '*PolicyManager also lists Storage/Redirected*no MDM applies it now*'
+        }
+
+        It 'NotApplied, naming a leftover that may still keep the GPO setting from applying' {
+            $rows = Invoke-Resolve -Mdm @(Get-TestPolicy @{
+                    Name = 'ADMX_TerminalServer/TS_USER_AUTHENTICATION_POLICY'; Value = $null; Source = 'None'; SourceKind = 'Leftover'; Leftover = $true
+                    AdmxBacked = $true; RedirectKey = 'SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'; RedirectValue = 'UserAuthentication'
+                }) -Cached @(Get-TestGpEntry -Key 'Software\Policies\Microsoft\Windows NT\Terminal Services' -ValueName 'UserAuthentication' -Value '1')
+
+            $rows.Count | Should -Be 1
+            $rows[0].Verdict | Should -Be 'NotApplied'
+            $rows[0].MatchedBy | Should -Be 'Value'
+            $rows[0].MdmSetting | Should -Be 'ADMX_TerminalServer/TS_USER_AUTHENTICATION_POLICY'
+            $rows[0].Note | Should -BeLike '*no MDM applies any more*MDMWinsOverGP is on*'
+        }
+
+        It 'gives one row to a setting that writes one value and blocks Group Policy at another' {
+            Write-TestValue -Path 'SOFTWARE\Policies\Microsoft\Windows\DataCollection' -Value @{ AllowTelemetry_PolicyManager = 3 }
+            $rows = Invoke-Resolve -Mdm @(Get-TestPolicy @{
+                    Name = 'System/AllowTelemetry'; Value = '3'
+                    RedirectKey = 'SOFTWARE\Policies\Microsoft\Windows\DataCollection'; RedirectValue = 'AllowTelemetry_PolicyManager'
+                    BlockKey = 'Software\Policies\Microsoft\Windows\DataCollection'; BlockValue = 'AllowTelemetry'
+                }) -Cached @(Get-TestGpEntry -Key 'Software\Policies\Microsoft\Windows\DataCollection' -ValueName 'AllowTelemetry' -Value '1')
+
+            $rows.Count | Should -Be 1
+            $rows[0].Verdict | Should -Be 'OverriddenByMdm'
+            $rows[0].MatchedBy | Should -Be 'Value'
+            $rows[0].Note | Should -BeLike '*the values differ*writes its own value to HKLM\SOFTWARE\Policies\Microsoft\Windows\DataCollection\AllowTelemetry_PolicyManager: 3.'
+        }
+
+        It 'compares the GPO value with the registry when the MDM sends an ADMX state' {
+            Write-TestValue -Path 'SOFTWARE\Policies\Microsoft\OneDrive' -Value @{ SilentAccountConfig = 1; BlockExternalSync = 1 }
+            $admx = @{ Value = '<enabled/>'; AdmxBacked = $true; RedirectKey = 'SOFTWARE\Policies\Microsoft\OneDrive' }
+            $rows = Invoke-Resolve -Mdm @(
+                Get-TestPolicy ($admx + @{ Name = 'OneDrive/SilentAccountConfig'; RedirectValue = 'SilentAccountConfig' })
+                Get-TestPolicy ($admx + @{ Name = 'OneDrive/BlockExternalSync'; RedirectValue = 'BlockExternalSync' })
+            ) -Cached @(Get-TestGpEntry -Key 'SOFTWARE\Policies\Microsoft\OneDrive' -ValueName 'SilentAccountConfig' -Value '0') `
+                -Applied @(Get-TestGpEntry -Key 'SOFTWARE\Policies\Microsoft\OneDrive' -ValueName 'BlockExternalSync' -Value '1')
+
+            ($rows | Where-Object Setting -EQ 'OneDrive/SilentAccountConfig').Note | Should -BeLike '*the GPO wants 0, the registry holds 1*'
+            $both = $rows | Where-Object Setting -EQ 'OneDrive/BlockExternalSync'
+            $both.Verdict | Should -Be 'Both'
+            $both.Note | Should -BeLike '*the GPO wants the value the registry holds*'
+        }
+
+        It 'says a match by key is weaker, and keeps the note short when many settings share the key' {
+            Write-TestValue -Path 'SOFTWARE\Policies\Microsoft\Shared' -Value @{ Written = 1; ByGp = 0 }
+            $policies = foreach ($letter in 'A', 'B', 'C', 'D', 'E') {
+                Get-TestPolicy @{ Name = "Admx/$letter"; Value = '<enabled/>'; AdmxBacked = $true; RedirectKey = 'SOFTWARE\Policies\Microsoft\Shared' }
+            }
+            $rows = Invoke-Resolve -Mdm @($policies) -Applied @(Get-TestGpEntry -Key 'SOFTWARE\Policies\Microsoft\Shared' -ValueName 'ByGp' -Value '0')
+
+            $byKey = $rows | Where-Object Setting -Like '*\Written'
+            $byKey.Verdict | Should -Be 'MdmOnly'
+            $byKey.MatchedBy | Should -Be 'Key'
+            $byKey.Note | Should -BeLike 'Matched by key only: one of the 5 MDM ADMX settings*'
+            ($rows | Where-Object Setting -Like '*\ByGp').Note | Should -BeLike '*Admx/A, Admx/B, Admx/C and 2 more.'
+        }
+
         It 'shows the main columns by default' {
             $rows = Invoke-Resolve -Cached @(Get-TestGpEntry -Key 'Software\Policies\Test' -ValueName 'Level' -Value '1')
             @($rows[0].PSStandardMembers.DefaultDisplayPropertySet.ReferencedPropertyNames) -join ',' |
@@ -583,6 +717,14 @@ Describe 'Get-PolicySource' -Skip:([Environment]::OSVersion.Platform -ne 'Win32N
             @(Select-PolicySource -Row $script:Rows -Verdict Unclaimed).Setting | Should -BeLike '*Appx\Stray'
             @(Select-PolicySource -Row $script:Rows -Filter '*Update GPO*').Setting | Should -Be 'Update/ActiveHoursStart'
             @(Select-PolicySource -Row $script:Rows -Filter 'HKLM\SOFTWARE\Policies\Microsoft\Windows\Appx\*').Count | Should -Be 1
+        }
+
+        It 'shows leftovers by default, after MdmOnly and before Unclaimed' {
+            $rows = Invoke-Resolve -Mdm @(
+                Get-TestPolicy @{ Name = 'Storage/Gone'; Value = $null; Source = 'None'; SourceKind = 'Leftover'; Leftover = $true }
+                Get-TestPolicy @{ Name = 'Storage/Kept'; Value = '1' }
+            )
+            (@(Select-PolicySource -Row $rows).Verdict) -join ',' | Should -Be 'MdmOnly,Leftover,Unclaimed'
         }
 
         It 'gives nothing, not an empty row, when nothing matches' {

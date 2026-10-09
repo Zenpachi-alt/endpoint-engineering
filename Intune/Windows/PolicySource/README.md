@@ -69,13 +69,18 @@ Rows come back in this order:
 | Verdict | Meaning |
 | --- | --- |
 | `Conflict` | Group Policy and an MDM both apply it, with different values. The note says whose value the registry holds. |
-| `OverriddenByMdm` | A GPO sets it, but Group Policy did not apply it because an MDM sets it too. The note says whether the two values differ. |
-| `NotApplied` | A GPO sets it, Group Policy did not apply it, and no MDM setting explains why. Check the Group Policy operational log. |
-| `Both` | Both set it. Intune sends ADMX-backed settings as a state (`Enabled`, `Disabled`, with any data), not as the registry value, so the two are not compared. |
+| `OverriddenByMdm` | A GPO sets it, but Group Policy did not apply it because an MDM sets it too. The note says whether the GPO's value differs from the one in effect. |
+| `NotApplied` | A GPO sets it, Group Policy did not apply it, and no active MDM setting explains why. When a leftover is listed for it, the note says so; otherwise check the Group Policy operational log. |
+| `Both` | Both set it. Intune sends ADMX-backed settings as a state (`Enabled`, `Disabled`, with any data), not as the registry value, so the note compares the GPO's value with the registry instead. |
 | `Agree` | Both set it, to the same value. |
 | `GpOnly` | Group Policy only: a registry policy setting, a Preferences item, or a wireless profile. |
 | `MdmOnly` | Intune or another MDM only. |
+| `Leftover` | PolicyManager still lists an MDM setting for it, but no enrollment holds a value, so no MDM applies it now. That is what remains when a policy is removed from the device, and it can also show briefly while an MDM re-applies its policies: run again after a sync to tell which. The registry value, if any, stayed behind. |
 | `Unclaimed` | A value under `HKLM\SOFTWARE\Policies` that no source claims: a script, an app, another management tool, or a Windows default. |
+
+A leftover is never taken for the source of a value. It still matters: with
+`MDMWinsOverGP` on, an MDM setting PolicyManager still lists can keep the
+matching GPO setting from applying, although nothing applies the MDM's.
 
 ### Columns
 
@@ -88,7 +93,8 @@ Rows come back in this order:
 | `OverriddenGpo` | GPOs that set the same value but lost on precedence. |
 | `GpSource` | `Registry policy`, `Preferences`, `Wireless profile`, or `GPO, not applied`. |
 | `MdmSetting`, `MdmValue` | The MDM setting and its value. An ADMX state is shown as `Enabled: id=value; ...`. |
-| `MdmSource`, `MdmSourceKind` | Who set it: `Intune`, another MDM's provider name, or `Windows`. |
+| `MdmSource`, `MdmSourceKind` | Who set it: `Intune`, another MDM's provider name, `Windows`, or `None` for a leftover. |
+| `MatchedBy` | How the row was tied to the MDM setting: `Value` when the setting writes exactly this value, `Key` when an ADMX-backed setting writes several values under this key and which one is not known. A match by key is weaker evidence. |
 | `RegistryPath` | The registry value, from `HKLM`. |
 | `Note` | Why the verdict is what it is, and anything that does not add up. A value written after Group Policy or the MDM is one example. |
 
@@ -121,6 +127,13 @@ A GPO setting in the cache that RSoP does not show was not applied. When an MDM
 setting writes the same value, or writes under the same key as an ADMX-backed
 setting, that is `OverriddenByMdm`.
 
+A setting with no winning enrollment and no value is a leftover. The `knobs`
+area is always Windows' own, whatever its record says, and the copies of list
+items PolicyManager keeps as `<Policy>_<Element>_ListSet` are not settings.
+An MDM setting that writes one value and blocks Group Policy at another, such as
+`System/AllowTelemetry`, gets one row, the one with Group Policy in it. Its note
+says where the MDM's own value is.
+
 `gpresult` is not used. It needs a domain controller and stalls for minutes
 without one, and the RSoP data and the cache together hold what it would add.
 
@@ -135,8 +148,11 @@ without one, and the RSoP data and the cache together hold what it would add.
 - **User settings.** Only computer settings are read.
 - **Security settings**: password and lockout policy, user rights, audit. They
   are applied by a separate engine, not through the registry.
-- **Value comparison for ADMX-backed MDM settings.** `Both` says they overlap,
-  but the state is not translated into the registry value it implies.
+- **Translating ADMX states.** An MDM state such as `Enabled` is not turned
+  into the registry value it means. The GPO's value is compared with the value
+  in the registry instead, which is the MDM's when the MDM wins.
+- **Which ADMX setting wrote a value matched by key.** `MdmSetting` lists every
+  ADMX-backed setting that writes under the key, and notes name up to three.
 
 `Unclaimed` is only looked for under `HKLM\SOFTWARE\Policies`. A value a script
 writes anywhere else is not reported.
