@@ -9,6 +9,7 @@ is [`Graph/Autopilot/Import-AutopilotDeviceIdentity.ps1`](../../../Graph/Autopil
 | --- | --- |
 | `Get-AutopilotHardwareHash.ps1` | Reads the hardware hash and serial number, writes an import-ready CSV. |
 | `Get-AutopilotHardwareHash.cmd` | Double-click launcher for OOBE. Prompts for a group tag, collects into a shared CSV. |
+| `Get-AutopilotHardwareHash.Tests.ps1` | Pester tests: the CSV and its columns, `-Append` merging, what the script refuses, file names, and the script run as a file. |
 
 ## Why collection and registration are separate
 
@@ -76,9 +77,12 @@ does not apply.
 ### Output
 
 A CSV with Intune's own column names: `Device Serial Number`,
-`Windows Product ID`, `Hardware Hash`, and `Group Tag` / `Assigned User` when
-either carries a value. `Windows Product ID` is deliberately blank — the PKID is
-available to OEMs only and is not required to register a device.
+`Windows Product ID`, `Hardware Hash`, then `Group Tag` and `Assigned User`,
+each only when at least one device in the file has a value for it. A file with
+a user and no group tag therefore has `Assigned User` straight after
+`Hardware Hash`, which is where Microsoft's user-assignment guidance puts it.
+`Windows Product ID` is deliberately blank — the PKID is available to OEMs only
+and is not required to register a device.
 
 With `-Append`, everything lands in one `AutopilotHWID.csv`. Records are keyed
 on serial number, and collecting a device again **replaces** its earlier record
@@ -127,13 +131,21 @@ but it cannot help with the key it lives on.
 
 The hardware hash read has been run elevated on physical hardware under both
 Windows PowerShell 5.1 and PowerShell 7.6, in per-device and `-Append` modes.
-Run unelevated, the script stops at the elevation guard with the message above
-and exit code `1`.
+Run unelevated, the script stops at the elevation guard, says it must run
+elevated, and exits `1`.
 
-The CSV format, the merge and replace behaviour, the file name sanitising and
-the unquoted-write rules are covered by tests run against Windows PowerShell
-5.1, including a round trip into the importer's parser and repeated `-Append`
-runs of the whole script against one file.
+`Get-AutopilotHardwareHash.Tests.ps1` covers the CSV format, the merge and
+replace behaviour, the file name sanitising and the unquoted-write rules. It
+tests the script's functions with `Get-CimInstance` mocked, checks what the
+parameters refuse against the script's own param block, and starts the whole
+script with `powershell.exe -File`, as a technician does, with stand-ins for
+the elevation check and the two WMI reads: one file per device, repeated
+`-Append` runs against one file, the placeholder warning, `-WhatIf`, and exit
+codes `0` and `1`. The tests run under Windows PowerShell 5.1 and
+PowerShell 7, on Windows only, like the script.
+[`Import-AutopilotDeviceIdentity.Tests.ps1`](../../../Graph/Autopilot/Import-AutopilotDeviceIdentity.Tests.ps1)
+writes CSVs with this script's own functions and reads them back through the
+importer's parser.
 
 Not yet exercised: collection from the Shift+F10 prompt during a real OOBE, and
 the `.cmd` launcher on a USB key.

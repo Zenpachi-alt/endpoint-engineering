@@ -94,8 +94,8 @@
 
 .NOTES
     Author        : Tomasz Pietryka
-    Version       : 1.1.0
-    Last updated  : 2026-09-23
+    Version       : 1.1.1
+    Last updated  : 2026-10-10
 
     PowerShell    : Windows PowerShell 5.1 only. PowerShell 7 is not present
                     during OOBE and cannot be assumed on a stock device.
@@ -119,14 +119,16 @@ param (
     [ValidateNotNullOrEmpty()]
     [string]$OutputPath = $(if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }),
 
+    # Both patterns end in \z, not $: $ also matches before a final line feed,
+    # and would let a value ending in one through.
     [Parameter()]
     [ValidateLength(0, 255)]
-    [ValidatePattern('^[^,"\r\n]*$')]
+    [ValidatePattern('^[^,"\r\n]*\z')]
     [string]$GroupTag = '',
 
     [Parameter()]
     [ValidateLength(0, 255)]
-    [ValidatePattern('^(|[^,"\r\n@]+@[^,"\r\n@]+\.[A-Za-z]{2,})$')]
+    [ValidatePattern('^(|[^,"\r\n@]+@[^,"\r\n@]+\.[A-Za-z]{2,})\z')]
     [string]$AssignedUser = '',
 
     [Parameter()]
