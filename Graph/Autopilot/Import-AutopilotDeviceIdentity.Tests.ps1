@@ -984,13 +984,15 @@ Describe 'The script, run as a file' {
             $run.Text | Should -BeLike '*Scriptfailed:Noimportabledevicefoundin*2row(s)wereunusable*'
         }
 
-        It 'exits 0 under -WhatIf, says what it would register, and returns each device as notSubmitted' {
+        It 'exits 0 under -WhatIf, says in one What-if line what it would register, and returns each device as notSubmitted' {
             $file = Write-DeviceCsv -Device (Get-TestDevice), (Get-TestDevice)
 
             $run = Invoke-ScriptFile -Argument '-CsvPath', $file, '-WhatIf'
 
             $run.ExitCode | Should -Be 0
             $run.Text | Should -BeLike "*Whatif:Performingtheoperation`"RegisterwithWindowsAutopilot`"ontarget`"2device(s)from'devices.csv'`".*"
+            # Its own, and none from the Graph module loading under -WhatIf.
+            [regex]::Matches($run.Text, 'Whatif:').Count | Should -Be 1 -Because $run.Text
             [regex]::Matches($run.Text, 'Status:notSubmitted').Count | Should -Be 2 -Because $run.Text
         }
     }

@@ -186,7 +186,17 @@ $ErrorActionPreference = 'Stop'
 # way before the script starts, and when the module runs code of its own while
 # it loads, as this one does, a script started with -File reports 0 whatever
 # it exits with.
+#
+# -WhatIf and -Confirm are switched off while the module loads, and restored
+# after it. A script started with -File runs in the global scope, where a
+# module looks up its preferences, so both would reach the Update-TypeData
+# calls the module makes as it loads: -WhatIf prints a line for each, ahead of
+# the script's own, and -Confirm asks about each, or fails the import where no
+# one can answer.
 try {
+    $GraphModulePreference = $WhatIfPreference, $ConfirmPreference
+    $WhatIfPreference = $false
+    $ConfirmPreference = 'None'
     # 4>$null, or a run with -Verbose lists every command the module imports.
     Import-Module -Name Microsoft.Graph.Authentication -MinimumVersion 2.0.0 -ErrorAction Stop 4>$null
 }
@@ -195,6 +205,9 @@ catch {
         "Microsoft.Graph.Authentication 2.0.0 or later could not be loaded: $($_.Exception.Message) " +
         'If it is not installed, run: Install-Module -Name Microsoft.Graph.Authentication -Scope CurrentUser')
     exit 1
+}
+finally {
+    $WhatIfPreference, $ConfirmPreference = $GraphModulePreference
 }
 #endregion Graph module
 
