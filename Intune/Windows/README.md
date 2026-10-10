@@ -1,8 +1,7 @@
 # Windows
 
-Artifacts for Windows endpoints: remediations, platform scripts, configuration
-profiles, applications, compliance policies, and technician tools that run on
-the device itself.
+Scripts for Windows endpoints: remediation packages Intune delivers, and
+technician tools that run on the device itself.
 
 | Folder | Contains |
 | --- | --- |
