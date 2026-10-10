@@ -897,8 +897,10 @@ Describe 'The script, run as a file' {
             # PowerShell running the tests, so that its exit ends that process
             # and not the test run. Returns the exit code, and STDOUT and
             # STDERR as one text without white space, because the host wraps
-            # long errors. Every case here ends before the script signs in;
-            # the timeout is there in case one does not.
+            # long errors, and without terminal escape sequences, because
+            # PowerShell 7 may colour the labels of a list, as it does in CI.
+            # Every case here ends before the script signs in; the timeout is
+            # there in case one does not.
             param ([string[]]$Argument)
 
             $quoted = foreach ($item in @('-NoProfile', '-NonInteractive', '-File', $script:ScriptPath) + $Argument) {
@@ -924,9 +926,10 @@ Describe 'The script, run as a file' {
             }
             $process.WaitForExit()
 
+            $escapeSequence = "$([char]27)\[[0-9;?]*[A-Za-z]"
             [pscustomobject]@{
                 ExitCode = $process.ExitCode
-                Text     = ($outputTask.Result + $errorTask.Result) -replace '\s', ''
+                Text     = (($outputTask.Result + $errorTask.Result) -replace $escapeSequence, '') -replace '\s', ''
             }
         }
     }
@@ -988,7 +991,7 @@ Describe 'The script, run as a file' {
 
             $run.ExitCode | Should -Be 0
             $run.Text | Should -BeLike "*Whatif:Performingtheoperation`"RegisterwithWindowsAutopilot`"ontarget`"2device(s)from'devices.csv'`".*"
-            [regex]::Matches($run.Text, 'Status:notSubmitted').Count | Should -Be 2
+            [regex]::Matches($run.Text, 'Status:notSubmitted').Count | Should -Be 2 -Because $run.Text
         }
     }
 }
