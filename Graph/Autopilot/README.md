@@ -6,6 +6,7 @@ workstation against a tenant.
 | Script | Purpose |
 | --- | --- |
 | `Import-AutopilotDeviceIdentity.ps1` | Registers devices with Autopilot from a hardware hash CSV. |
+| `Import-AutopilotDeviceIdentity.Tests.ps1` | Pester tests for it, including a round trip of a CSV the collector wrote. |
 
 The CSV these consume is produced on the device by
 [`Intune/Windows/Autopilot/Get-AutopilotHardwareHash.ps1`](../../Intune/Windows/Autopilot/README.md),
@@ -116,9 +117,18 @@ local server that throttles. It has not yet met a real tenant's throttle.
 
 ### Verification status
 
-CSV parsing, validation, deduplication, group tag override, request body
-construction and error advice are covered by tests run against Windows
-PowerShell 5.1, including a round trip from a CSV written by the collector.
+`Import-AutopilotDeviceIdentity.Tests.ps1` covers CSV parsing, validation,
+deduplication, the group tag override, request body construction and error
+advice, including a round trip of CSVs written with the collector's own
+functions. It runs the script's main block, with its own param block, so that
+`-WhatIf`, `-Confirm` and the parameter checks are the script's, against a
+stand-in service and clock: nothing sent and no sign-in under `-WhatIf`, one
+request per device, polling to a final state, the timeout, an
+already-registered device reported as a skip, and the exit code of each. It
+also starts the script with `-File` in a child process for the failures before
+sign-in. The tests run under Windows PowerShell 5.1 and PowerShell 7; the three
+that start the script past its module check are skipped where
+`Microsoft.Graph.Authentication` is not installed.
 
 Version 1.1.0 was also run end to end, under Windows PowerShell 5.1 and
 PowerShell 7, against stand-ins for the Graph cmdlets: a 503 on submission,

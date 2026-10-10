@@ -94,6 +94,17 @@ outside this repository. Committing one would be caught by
 `Tools/Test-SensitiveContent.ps1`, but the better habit is not to put it in the
 working tree at all.
 
+### How it is tested
+
+`Get-ManagedDeviceInventory.Tests.ps1` loads the script's functions and runs
+its main block, with its own param block, against a stand-in tenant held in
+memory, so no tenant or module is needed. It covers the record made of each
+device, the request with and without `-Filter`, each local filter and all of
+them together, the `-StaleAfterDays` boundary and never-synced devices, the
+CSV, and the values the parameters refuse. The tests run under Windows
+PowerShell 5.1 and PowerShell 7. The paging and retry behind the request are
+the shared Graph helpers', tested by `Templates/Script-Template.Tests.ps1`.
+
 ### Reference
 
 - [List managedDevices](https://learn.microsoft.com/graph/api/intune-devices-manageddevice-list)
