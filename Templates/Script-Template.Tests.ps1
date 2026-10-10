@@ -12,7 +12,7 @@
     the checks that a script reports a failure and keeps its exit code.
 
 .DESCRIPTION
-    Four parts.
+    Five parts.
 
     Copies: every script under Graph/, and any other script that carries the
     Graph helpers region, must hold copies of the Graph module and Graph
@@ -27,6 +27,11 @@
     error of its own. Where Microsoft.Graph.Authentication is not installed,
     the template is also started as a file, and must exit 1 and say what to
     install. The scripts' own tests start them as files where it is installed.
+
+    Module load: where Microsoft.Graph.Authentication is installed, the
+    template's Graph module region is run as a file with -WhatIf and with
+    -Confirm. The module must load without a What-if line or a question of
+    its own, and the script must keep both switches for what follows.
 
     Behaviour: the helpers run against stand-ins for the Microsoft Graph SDK
     cmdlets, so retry, paging and scope checks are tested without the module
@@ -200,6 +205,71 @@ Describe 'The template, run as a file where the module is not installed' -Skip:$
 
         $exitCode | Should -Be 1
         $text | Should -BeLike '*Microsoft.Graph.Authentication2.0.0orlatercouldnotbeloaded*Install-Module-NameMicrosoft.Graph.Authentication*'
+    }
+}
+
+Describe 'The Graph module region, run as a file with -WhatIf or -Confirm' -Skip:(-not $script:ModuleAvailable) {
+
+    BeforeAll {
+        # A script that loads the module through the template's region, then
+        # says which preferences it is left with and writes a file, which
+        # -WhatIf must still stop. Started with -File, as a scheduled task
+        # starts it: only then does the script run in the global scope, where
+        # the module would read its -WhatIf and -Confirm.
+        $script:RegionScript = Join-Path -Path $TestDrive -ChildPath 'Import-GraphModule.ps1'
+        $lines = @(
+            "[CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]"
+            'param ([Parameter(Mandatory)][string]$Path)'
+            'Set-StrictMode -Version Latest'
+            "`$ErrorActionPreference = 'Stop'"
+        ) + (Get-CopiedRegion -Path $script:TemplatePath -Name 'Graph module') + @(
+            '"After the region: WhatIf=$WhatIfPreference Confirm=$ConfirmPreference"'
+            # -Confirm:$false, so that a run with -Confirm has nothing to ask.
+            "Set-Content -LiteralPath `$Path -Value 'written' -Confirm:`$false"
+        )
+        [System.IO.File]::WriteAllText($script:RegionScript, ($lines -join "`n"))
+
+        function Invoke-RegionScript {
+            # Starts the script with -NonInteractive, so that a question fails
+            # instead of waiting. Returns the exit code, STDOUT and STDERR as
+            # one text without white space or terminal escape sequences, as
+            # Invoke-ScriptFile in the Autopilot tests does, and whether the
+            # file was written.
+            param ([Parameter(Mandatory)][string]$Switch)
+
+            $target = Join-Path -Path $TestDrive -ChildPath ([guid]::NewGuid().ToString('n'))
+            # Continue, not the caller's Stop, for the reason in the test above.
+            $ErrorActionPreference = 'Continue'
+            $output = @(& (Get-Process -Id $PID).Path -NoProfile -NonInteractive -File $script:RegionScript `
+                    -Path $target $Switch 2>&1)
+            $exitCode = $LASTEXITCODE
+
+            $escapeSequence = "$([char]27)\[[0-9;?]*[A-Za-z]"
+            [pscustomobject]@{
+                ExitCode = $exitCode
+                Text     = ((@($output | ForEach-Object { [string]$_ }) -join '') -replace $escapeSequence, '') -replace '\s', ''
+                Written  = Test-Path -LiteralPath $target
+            }
+        }
+    }
+
+    It 'loads the module under -WhatIf without a What-if line of its own, and -WhatIf still holds after it' {
+        $run = Invoke-RegionScript -Switch '-WhatIf'
+
+        $run.ExitCode | Should -Be 0 -Because $run.Text
+        $run.Text | Should -Not -BeLike '*UpdateTypeData*'
+        $run.Text | Should -BeLike '*Aftertheregion:WhatIf=True*'
+        $run.Text | Should -BeLike '*Whatif:Performingtheoperation"SetContent"*'
+        $run.Written | Should -BeFalse
+    }
+
+    It 'loads the module under -Confirm where no one can answer, and -Confirm still holds after it' {
+        $run = Invoke-RegionScript -Switch '-Confirm'
+
+        $run.ExitCode | Should -Be 0 -Because $run.Text
+        $run.Text | Should -Not -BeLike '*couldnotbeloaded*'
+        $run.Text | Should -BeLike '*Aftertheregion:WhatIf=FalseConfirm=Low*'
+        $run.Written | Should -BeTrue
     }
 }
 

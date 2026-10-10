@@ -6,7 +6,7 @@ copied into the domain folder it belongs to and renamed after the thing it does.
 | Template | Use for |
 | --- | --- |
 | `Script-Template.ps1` | Admin-side tooling run by a person against a tenant: Graph queries, bulk operations, reporting. Holds the master copies of the Graph module region and the Graph helpers. |
-| `Script-Template.Tests.ps1` | Tests for the Graph helpers, the check that every copy of both regions under `Graph/` matches the template's, and the checks that a script reports a failure and keeps its exit code. |
+| `Script-Template.Tests.ps1` | Tests for the Graph helpers, the check that every copy of both regions under `Graph/` matches the template's, the checks that a script reports a failure and keeps its exit code, and the check that `-WhatIf` and `-Confirm` stay out of the module as it loads. |
 | `Remediation/` | Endpoint-side script pairs run by the Intune management extension on a device, the optional TimeGuard block for packages with heavy checks, and the test harness every package's tests carry. |
 
 ## Which one to start from
@@ -92,6 +92,23 @@ body of its `try` and never its `catch`. So where a script can fail before it
 signs in, its tests also start it as a file in a child process and assert the
 exit code and the message. Those tests need the module, and are skipped where
 it is not installed for the PowerShell that runs them.
+
+## -WhatIf and -Confirm while the module loads
+
+A script started with `-File` runs in the global scope, which is where a module
+looks up preferences it does not set itself. So the script's `-WhatIf` and
+`-Confirm` reach the code `Microsoft.Graph.Authentication` runs while it loads,
+including its `Update-TypeData` calls. Under `-WhatIf`, each call printed a
+What-if line ahead of the script's own (fifteen with version 2.41.0) and left
+the type data unregistered. Under `-Confirm`, each call asked, and a run with
+`-NonInteractive` could not load the module at all. That was seen on Windows
+PowerShell 5.1 and PowerShell 7.6, and only with `-File`.
+
+The Graph module region therefore switches both off for the import and
+restores them in its `finally`, so they govern everything after it as before.
+Setting them in a child scope would not help, because the module never looks
+there. `Script-Template.Tests.ps1` runs the region as a file under each
+switch.
 
 ## Declaring the PowerShell version
 
