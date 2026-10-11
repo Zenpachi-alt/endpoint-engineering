@@ -1,4 +1,4 @@
-# Endpoint Engineering
+# ![Endpoint Engineering](.github/banner.svg)
 
 [![CI](https://github.com/Zenpachi-alt/endpoint-engineering/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Zenpachi-alt/endpoint-engineering/actions/workflows/ci.yml)
 

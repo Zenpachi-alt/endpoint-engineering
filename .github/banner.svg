@@ -1,0 +1,27 @@
+<!-- SPDX-FileCopyrightText: 2026 Tomasz Pietryka -->
+<!-- SPDX-License-Identifier: MIT -->
+<!-- Source: https://github.com/Zenpachi-alt/endpoint-engineering -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="256" viewBox="0 0 1280 256"
+     role="img" aria-labelledby="title desc">
+  <title id="title">Endpoint Engineering</title>
+  <desc id="desc">The tenant, the device, and the work in between.</desc>
+  <style>
+    /* The Windows PowerShell 5.1 console: its background, and PSReadLine's token colours. */
+    .mono {
+      font-family: "Cascadia Mono", Consolas, ui-monospace, "SF Mono", Menlo,
+                   "DejaVu Sans Mono", "Liberation Mono", monospace;
+    }
+    .prompt  { fill: #F9F1A5; }
+    .title   { fill: #EEEDF0; font-weight: 700; }
+    .comment { fill: #13A10E; }
+    .cursor  { animation: blink 1.1s step-end infinite; }
+    @keyframes blink { 50% { fill-opacity: 0; } }
+    @media (prefers-reduced-motion: reduce) { .cursor { animation: none; } }
+  </style>
+
+  <rect width="1280" height="256" rx="12" fill="#012456"/>
+
+  <!-- The cursor is a glyph in the same line, so it follows the title in any font. -->
+  <text class="mono" x="64" y="122" font-size="52"><tspan class="prompt">PS&gt; </tspan><tspan class="title">Endpoint Engineering</tspan><tspan class="title cursor">_</tspan></text>
+  <text class="mono comment" x="64" y="176" font-size="22"># The tenant, the device, and the work in between</text>
+</svg>
