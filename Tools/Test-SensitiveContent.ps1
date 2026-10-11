@@ -145,14 +145,15 @@ $WellKnownGuid = @(
 )
 
 # Domains that are fictitious by convention, plus the public services this
-# repository legitimately links to.
+# repository legitimately links to. w3.org is there for the XML namespaces that
+# every SVG and XML schema names.
 $AllowedDomain = @(
     'contoso.com', 'contoso.local', 'contoso.onmicrosoft.com'
     'fabrikam.com', 'adatum.com', 'tailspintoys.com', 'woodgrovebank.com'
     'example.com', 'example.net', 'example.org', 'localhost'
     'microsoft.com', 'windows.com', 'office.com', 'azure.com'
     'github.com', 'githubusercontent.com', 'powershellgallery.com', 'nuget.org'
-    'ietf.org', 'opensource.org'
+    'ietf.org', 'opensource.org', 'w3.org'
 )
 
 $AllowedIPAddress = @(
