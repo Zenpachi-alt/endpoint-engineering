@@ -287,6 +287,8 @@ Describe 'Graph helpers' {
         $script:SignIns = New-Object -TypeName 'System.Collections.Generic.List[object]'
         $script:Sleeps = New-Object -TypeName 'System.Collections.Generic.List[int]'
         $script:Notices = New-Object -TypeName 'System.Collections.Generic.List[string]'
+        $script:Shown = New-Object -TypeName 'System.Collections.Generic.List[string]'
+        $script:DeviceCodePrompt = 'To sign in, use a web browser to open the page https://login.microsoft.com/device and enter the code TESTCODE to authenticate.'
 
         # Stand-ins for the Microsoft.Graph.Authentication cmdlets the helpers
         # call. Each queued response is an exception to throw, or an object
@@ -341,6 +343,12 @@ Describe 'Graph helpers' {
                     NoWelcome     = $NoWelcome.IsPresent
                     UseDeviceCode = $UseDeviceCode.IsPresent
                 })
+
+            # Like the real cmdlet, writes the device code prompt to the output
+            # stream, as data, and only then waits for the code to be entered.
+            # Whatever is shown after it returns was shown too late to act on.
+            if ($UseDeviceCode) { $script:DeviceCodePrompt }
+            $script:ShownBeforeSignInEnded = @($script:Shown)
             $script:Context = $script:ContextAfterSignIn
         }
 
@@ -400,6 +408,8 @@ Describe 'Graph helpers' {
         $script:SignIns.Clear()
         $script:Sleeps.Clear()
         $script:Notices.Clear()
+        $script:Shown.Clear()
+        $script:ShownBeforeSignInEnded = $null
         $script:SdkMaxRetry = 3
         $script:Context = $null
         $script:ContextAfterSignIn = $null
@@ -705,6 +715,11 @@ Describe 'Graph helpers' {
 
     Context 'Connect-GraphSession' {
 
+        BeforeAll {
+            # What the person signing in is shown, recorded rather than printed.
+            Mock Write-Information { $script:Shown.Add([string]$MessageData) }
+        }
+
         It 'reuses a session that already holds the scope, and says it opened none' {
             $script:Context = Get-StandInContext -Scopes 'DeviceManagementManagedDevices.Read.All'
 
@@ -728,6 +743,16 @@ Describe 'Graph helpers' {
             $script:SignIns[0].TenantId | Should -Be $script:TenantA
             $script:SignIns[0].UseDeviceCode | Should -BeTrue
             $script:SignIns[0].NoWelcome | Should -BeTrue
+        }
+
+        It 'shows the device code while the sign-in still waits for it, and returns only whether it signed in' {
+            $script:ContextAfterSignIn = Get-StandInContext -Scopes 'DeviceManagementManagedDevices.Read.All'
+
+            $result = @(Connect-GraphSession -Scope $script:ReadScope -UseDeviceCode)
+
+            @($script:ShownBeforeSignInEnded) | Should -Be @($script:DeviceCodePrompt) -Because (
+                'a code shown only after Connect-MgGraph returns is never entered, and the sign-in times out')
+            $result | Should -Be @($true)
         }
 
         It 'signs in again when the session belongs to another tenant' {

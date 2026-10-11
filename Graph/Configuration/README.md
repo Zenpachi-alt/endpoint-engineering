@@ -218,7 +218,8 @@ session, or what `pwsh -File` returns to a scheduled task.
 
 A Graph session that already holds the scopes the run needs is reused and left
 open. Otherwise the script signs in, and disconnects that session when the run
-ends. An app-only session connected beforehand for unattended use is never
+ends. Where a browser prompt cannot open, `-UseDeviceCode` signs in with a code
+entered on another device instead. An app-only session connected beforehand for unattended use is never
 replaced: its application permissions are checked against what the run needs,
 and a missing one stops the run before anything is read.
 
@@ -250,6 +251,8 @@ takes a tenant to produce, and is not tested.
 They cover the Windows updates category, the timestamp helpers and the Autopatch
 note: which files are written, what the index says, how a failure on one policy
 or one policy type stays contained, and that every read honours `-MaxRetries`.
+They also cover signing in: the read scopes a run asks for, `-UseDeviceCode`,
+and which broader scopes an existing session may hold instead.
 The other four categories are not covered yet.
 
 What they cannot show is that Graph still answers as documented. The stand-in

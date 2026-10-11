@@ -720,6 +720,9 @@ function Connect-GraphSession {
             A delegated session for another tenant, or without a needed scope,
             is replaced by a new sign-in. An app-only session is never
             replaced: the function fails and names the permission to grant.
+
+            With -UseDeviceCode, the code and the address to enter it at are
+            shown on the information stream while the sign-in waits for them.
     #>
     [CmdletBinding()]
     [OutputType([bool])]
@@ -779,7 +782,15 @@ function Connect-GraphSession {
         Write-Verbose 'Starting device code sign-in. A code and a URL follow.'
     }
 
-    $null = Connect-MgGraph @connectParameters
+    # Connect-MgGraph writes what it has to tell the person signing in - the
+    # device code and where to enter it, or the welcome where -NoWelcome is
+    # missing - to the output stream, as data. Discarded, the code never shows
+    # and the sign-in waits until it times out. Passed on as information, each
+    # line shows the moment it is written, while the sign-in still waits, and
+    # stays out of what this function returns.
+    Connect-MgGraph @connectParameters | ForEach-Object {
+        Write-Information -MessageData $_ -InformationAction Continue
+    }
 
     $context = Get-MgContext
     if (-not $context) { throw 'Connect-MgGraph finished, but no Graph session is available.' }

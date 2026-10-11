@@ -34,7 +34,7 @@ should write twice:
 
 | Function | Does |
 | --- | --- |
-| `Connect-GraphSession` | Reuses a session that already holds the scopes, signs in when none does, and verifies consent either way. Accepts broader scopes the script lists as alternatives. Never replaces an app-only session. Returns whether it signed in, so the script disconnects only what it opened. |
+| `Connect-GraphSession` | Reuses a session that already holds the scopes, signs in when none does, and verifies consent either way. Accepts broader scopes the script lists as alternatives. Never replaces an app-only session. Shows a device code sign-in's code while the sign-in waits for it. Returns whether it signed in, so the script disconnects only what it opened. |
 | `Invoke-GraphRequestWithRetry` | Sends one GET, POST, PATCH or DELETE. Retries 429 and 5xx, and a GET that got no response at all, honouring `Retry-After`. A POST, PATCH or DELETE is resent only after 429 or 503, so a change is never made twice. Failures carry the HTTP status in `Exception.Data['StatusCode']`. |
 | `Get-GraphCollection` | Follows `@odata.nextLink` to the last page and returns a `List`, even when empty. |
 
@@ -109,6 +109,25 @@ restores them in its `finally`, so they govern everything after it as before.
 Setting them in a child scope would not help, because the module never looks
 there. `Script-Template.Tests.ps1` runs the region as a file under each
 switch.
+
+## The device code prompt
+
+`Connect-MgGraph -UseDeviceCode` writes the code, and the address to enter it
+at, to the output stream, as data, rather than to the console. That is in the
+SDK's source for versions 2.31.0 and 2.41.0, and was seen on a live run with
+2.41.0. Discarded with `$null =`, as `Connect-GraphSession` once did, the code
+never shows, and the sign-in waits until the SDK gives up after 120 seconds.
+
+`Connect-GraphSession` passes each line `Connect-MgGraph` writes to
+`Write-Information -InformationAction Continue`, through the pipeline. A
+pipeline hands a line on the moment it is written, so the code shows while the
+sign-in waits for it, and the function still returns only whether it signed
+in. Collecting the output first and writing it afterwards would show the code
+only once the sign-in had ended, which without the code it never does.
+
+The stand-in `Connect-MgGraph` in `Script-Template.Tests.ps1` writes a prompt
+the same way, and a test fails unless the prompt is shown before the stand-in
+returns. It fails against both mistakes above.
 
 ## Declaring the PowerShell version
 
