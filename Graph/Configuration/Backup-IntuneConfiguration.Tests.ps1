@@ -8,14 +8,17 @@
 <#
 .SYNOPSIS
     Pester tests for Backup-IntuneConfiguration.ps1: the WindowsUpdates
-    category, the timestamp helpers, and the Autopatch note in the index.
+    category, the timestamp helpers, the Autopatch note in the index, and the
+    scopes the script signs in with.
 
 .DESCRIPTION
     The script's functions are loaded from its syntax tree, so its main block,
     which signs in to Graph and ends with exit, never runs. The script reads
     Graph only through Get-GraphObject and Get-GraphCollection. Both are
     replaced by stand-ins that serve a made-up tenant from memory, and the
-    backup is written to Pester's TestDrive.
+    backup is written to Pester's TestDrive. Signing in goes through the
+    script's real scope check, against stand-ins for Connect-MgGraph and
+    Get-MgContext.
 
     That proves the script's own logic: which files it writes, what the index
     says, and how a failure stays contained. It cannot prove that Graph still
@@ -579,6 +582,91 @@ Describe 'The WindowsUpdates category' {
             $run.Rows | Should -HaveCount 1
             $run.Rows[0].DisplayName | Should -Be 'Expedite September'
         }
+    }
+}
+
+Describe 'Signing in' {
+
+    BeforeAll {
+        # Stand-ins for the two SDK cmdlets the shared Connect-GraphSession
+        # calls, so the scopes the script asks for meet the real check.
+        function Get-MgContext { $script:Session }
+
+        function Connect-MgGraph {
+            [CmdletBinding()]
+            param ([string[]]$Scopes, [string]$TenantId, [switch]$NoWelcome, [switch]$UseDeviceCode)
+
+            $script:SignIns.Add([pscustomobject]@{
+                    Scopes        = $Scopes
+                    TenantId      = $TenantId
+                    NoWelcome     = $NoWelcome.IsPresent
+                    UseDeviceCode = $UseDeviceCode.IsPresent
+                })
+            $script:Session = Get-StandInSession -Scopes $Scopes
+        }
+
+        function Get-StandInSession {
+            param ([string[]]$Scopes)
+
+            [pscustomobject]@{
+                AuthType = 'Delegated'
+                Scopes   = $Scopes
+                TenantId = $script:SessionTenant
+                Account  = 'admin@contoso.com'
+                AppName  = $null
+            }
+        }
+
+        $script:SessionTenant = [guid]::NewGuid().ToString()
+        $script:SignIns = [System.Collections.Generic.List[object]]::new()
+        $script:ReadScopes = @('DeviceManagementConfiguration.Read.All', 'DeviceManagementScripts.Read.All',
+            'GroupMember.Read.All')
+    }
+
+    BeforeEach {
+        Initialize-BackupState
+        $script:SignIns.Clear()
+        $script:Session = $null
+
+        # What the script's parameters would set, at their defaults.
+        $script:Category = @('Remediations', 'PlatformScripts', 'ConfigurationProfiles', 'CompliancePolicies', 'WindowsUpdates')
+        $script:IncludeDeviceRunStates = [switch]$false
+        $script:SkipGroupNameResolution = [switch]$false
+        $script:TenantId = $null
+    }
+
+    It 'asks only for the read scopes the run needs, with a browser unless told otherwise' {
+        Connect-GraphForBackup | Should -BeTrue
+
+        $script:SignIns.Count | Should -Be 1
+        $script:SignIns[0].Scopes | Should -Be $script:ReadScopes
+        $script:SignIns[0].UseDeviceCode | Should -BeFalse
+    }
+
+    It 'signs in with a device code when -UseDeviceCode is given' {
+        Connect-GraphForBackup -UseDeviceCode | Should -BeTrue
+
+        $script:SignIns[0].UseDeviceCode | Should -BeTrue
+    }
+
+    It 'reuses a session that holds GroupMember.ReadWrite.All for the group names' {
+        $script:Session = Get-StandInSession -Scopes @(
+            'DeviceManagementConfiguration.Read.All', 'DeviceManagementScripts.Read.All', 'GroupMember.ReadWrite.All')
+
+        Connect-GraphForBackup | Should -BeFalse
+        $script:SignIns.Count | Should -Be 0
+    }
+
+    It 'does not take the permission to wipe devices for the permission to read them' {
+        # PrivilegedOperations.All allows remote actions such as a wipe. It
+        # does not allow reading devices, which the run states need.
+        $script:IncludeDeviceRunStates = [switch]$true
+        $script:Session = Get-StandInSession -Scopes ($script:ReadScopes +
+            'DeviceManagementManagedDevices.PrivilegedOperations.All')
+
+        Connect-GraphForBackup 3>$null | Should -BeTrue
+        $script:SignIns[0].Scopes | Should -Contain 'DeviceManagementManagedDevices.Read.All'
+        $script:SignIns[0].Scopes | Should -Not -Contain 'DeviceManagementManagedDevices.PrivilegedOperations.All'
     }
 }
 

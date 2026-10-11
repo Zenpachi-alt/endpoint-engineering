@@ -93,6 +93,10 @@
     Tenant to connect to when a new connection is needed, as a GUID or a
     verified domain name. Omitting this uses the signed-in user's home tenant.
 
+.PARAMETER UseDeviceCode
+    Sign in with the device code flow, for hosts where a browser prompt
+    cannot open. Used only when the run has to sign in.
+
 .PARAMETER CsvDelimiter
     Delimiter for BackupIndex.csv and the run state CSVs. Defaults to ','. Use
     ';' where Excel on the device uses a semicolon list separator.
@@ -129,8 +133,8 @@
 
 .NOTES
     Author        : Tomasz Pietryka
-    Version       : 1.3.0
-    Last updated  : 2026-09-25
+    Version       : 1.4.0
+    Last updated  : 2026-10-11
 
     PowerShell    : 7.2 or later. The script uses Path.GetRelativePath and
                     -Encoding utf8BOM, which Windows PowerShell 5.1 lacks, and
@@ -235,6 +239,9 @@ param (
     [string]$TenantId,
 
     [Parameter()]
+    [switch]$UseDeviceCode,
+
+    [Parameter()]
     [char]$CsvDelimiter = ',',
 
     [Parameter()]
@@ -282,7 +289,7 @@ finally {
 
 $script:GraphBeta      = 'https://graph.microsoft.com/beta'
 $script:GraphV1        = 'https://graph.microsoft.com/v1.0'
-$script:ScriptVersion  = '1.3.0'
+$script:ScriptVersion  = '1.4.0'
 $script:LogFile        = $null
 $script:BackupRoot     = $null
 $script:Index          = [System.Collections.Generic.List[object]]::new()
@@ -742,6 +749,9 @@ function Connect-GraphSession {
             A delegated session for another tenant, or without a needed scope,
             is replaced by a new sign-in. An app-only session is never
             replaced: the function fails and names the permission to grant.
+
+            With -UseDeviceCode, the code and the address to enter it at are
+            shown on the information stream while the sign-in waits for them.
     #>
     [CmdletBinding()]
     [OutputType([bool])]
@@ -801,7 +811,15 @@ function Connect-GraphSession {
         Write-Verbose 'Starting device code sign-in. A code and a URL follow.'
     }
 
-    $null = Connect-MgGraph @connectParameters
+    # Connect-MgGraph writes what it has to tell the person signing in - the
+    # device code and where to enter it, or the welcome where -NoWelcome is
+    # missing - to the output stream, as data. Discarded, the code never shows
+    # and the sign-in waits until it times out. Passed on as information, each
+    # line shows the moment it is written, while the sign-in still waits, and
+    # stays out of what this function returns.
+    Connect-MgGraph @connectParameters | ForEach-Object {
+        Write-Information -MessageData $_ -InformationAction Continue
+    }
 
     $context = Get-MgContext
     if (-not $context) { throw 'Connect-MgGraph finished, but no Graph session is available.' }
@@ -1630,7 +1648,9 @@ function Connect-GraphForBackup {
     # which session the backup runs under. Returns $true when it signed in.
     [CmdletBinding()]
     [OutputType([bool])]
-    param()
+    param(
+        [Parameter()][switch]$UseDeviceCode
+    )
 
     # Each scope this run needs, with the broader scopes that also satisfy it.
     $scopes = [ordered]@{
@@ -1640,13 +1660,14 @@ function Connect-GraphForBackup {
         $scopes['DeviceManagementScripts.Read.All'] = @('DeviceManagementScripts.ReadWrite.All')
     }
     if ($IncludeDeviceRunStates) {
-        $scopes['DeviceManagementManagedDevices.Read.All'] = @('DeviceManagementManagedDevices.ReadWrite.All', 'DeviceManagementManagedDevices.PrivilegedOperations.All')
+        $scopes['DeviceManagementManagedDevices.Read.All'] = @('DeviceManagementManagedDevices.ReadWrite.All')
     }
     if (-not $SkipGroupNameResolution) {
-        $scopes['GroupMember.Read.All'] = @('Group.Read.All', 'Group.ReadWrite.All', 'Directory.Read.All', 'Directory.ReadWrite.All')
+        $scopes['GroupMember.Read.All'] = @('GroupMember.ReadWrite.All', 'Group.Read.All', 'Group.ReadWrite.All',
+            'Directory.Read.All', 'Directory.ReadWrite.All')
     }
 
-    $openedHere = Connect-GraphSession -Scope $scopes -TenantId $TenantId
+    $openedHere = Connect-GraphSession -Scope $scopes -TenantId $TenantId -UseDeviceCode:$UseDeviceCode
 
     $context = Get-MgContext
     $identity = if ($context.AuthType -eq 'AppOnly') { "app $($context.AppName)" } else { $context.Account }
@@ -1684,7 +1705,7 @@ try {
             Write-BackupLog -Level WARN -Message 'Encrypted OMA-URI values will be written to disk in plain text.'
         }
 
-        $ConnectionOpenedHere = Connect-GraphForBackup
+        $ConnectionOpenedHere = Connect-GraphForBackup -UseDeviceCode:$UseDeviceCode
         $graphContext = Get-MgContext
     }
     catch {
