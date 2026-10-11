@@ -1,0 +1,30 @@
+<!-- SPDX-FileCopyrightText: 2026 Tomasz Pietryka -->
+<!-- SPDX-License-Identifier: MIT -->
+<!-- Source: https://github.com/Zenpachi-alt/endpoint-engineering -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640"
+     role="img" aria-labelledby="title desc">
+  <title id="title">Endpoint Engineering</title>
+  <desc id="desc">The tenant, the device, and the work in between.</desc>
+  <!-- The source of the repository's social preview: banner.svg at 2:1. GitHub accepts only
+       PNG, JPG or GIF there, so render this at 1280x640 and device scale 1 (a headless
+       browser screenshot will do) and upload the PNG under Settings, General, Social
+       preview. The PNG keeps the font it was rendered with: the text is centred for
+       Cascadia Mono, and needs moving if another font renders it. -->
+  <style>
+    .mono {
+      font-family: "Cascadia Mono", Consolas, ui-monospace, "SF Mono", Menlo,
+                   "DejaVu Sans Mono", "Liberation Mono", monospace;
+    }
+    .prompt  { fill: #F9F1A5; }
+    .title   { fill: #EEEDF0; font-weight: 700; }
+    .comment { fill: #13A10E; }
+    .repo    { fill: #EEEDF0; fill-opacity: 0.5; }
+  </style>
+
+  <!-- Square corners: a link card has no page behind it to show through. -->
+  <rect width="1280" height="640" fill="#012456"/>
+
+  <text class="mono" x="113" y="300" font-size="72"><tspan class="prompt">PS&gt; </tspan><tspan class="title">Endpoint Engineering_</tspan></text>
+  <text class="mono comment" x="113" y="370" font-size="30"># The tenant, the device, and the work in between</text>
+  <text class="mono repo" x="113" y="540" font-size="24">github.com/Zenpachi-alt/endpoint-engineering</text>
+</svg>
