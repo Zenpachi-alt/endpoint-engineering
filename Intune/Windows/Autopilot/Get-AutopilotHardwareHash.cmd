@@ -1,7 +1,7 @@
 @echo off
 rem SPDX-FileCopyrightText: 2026 Tomasz Pietryka
 rem SPDX-License-Identifier: MIT
-rem Source: https://github.com/Zenpachi-alt/endpoint-engineering
+rem Source: https://github.com/zenpachi-alt/endpoint-engineering
 rem
 rem OOBE launcher for Get-AutopilotHardwareHash.ps1. Double-click from the USB
 rem key, or run it from the Shift+F10 command prompt during OOBE. Collects into

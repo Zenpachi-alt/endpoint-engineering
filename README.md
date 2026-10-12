@@ -1,6 +1,6 @@
 # ![Endpoint Engineering](.github/banner.svg)
 
-[![CI](https://github.com/Zenpachi-alt/endpoint-engineering/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Zenpachi-alt/endpoint-engineering/actions/workflows/ci.yml)
+[![CI](https://github.com/zenpachi-alt/endpoint-engineering/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/zenpachi-alt/endpoint-engineering/actions/workflows/ci.yml)
 
 PowerShell for Microsoft Intune, Windows Autopilot and Microsoft Graph: tooling
 run against a tenant, scripts that run on managed Windows devices, and utilities

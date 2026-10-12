@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Tomasz Pietryka
 # SPDX-License-Identifier: MIT
-# Source: https://github.com/Zenpachi-alt/endpoint-engineering
+# Source: https://github.com/zenpachi-alt/endpoint-engineering
 
 #Requires -Version 7.0
 

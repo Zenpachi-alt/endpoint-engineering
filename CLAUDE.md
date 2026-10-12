@@ -47,7 +47,7 @@ outside my organisation.
   ```
   # SPDX-FileCopyrightText: 2026 Tomasz Pietryka
   # SPDX-License-Identifier: MIT
-  # Source: https://github.com/Zenpachi-alt/endpoint-engineering
+  # Source: https://github.com/zenpachi-alt/endpoint-engineering
   ```
 
   Single files get copied out of repositories and lose their context. The
