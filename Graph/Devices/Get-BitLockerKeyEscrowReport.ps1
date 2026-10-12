@@ -426,6 +426,16 @@ function Invoke-GraphRequestWithRetry {
 
             Each retry is announced with Write-Warning, or handed to -OnRetry
             instead, for a script that keeps its own log.
+
+            A URI on https://graph.microsoft.com reaches the SDK as a path
+            relative to it, which the SDK sends to the same address. Given an
+            absolute URI, Invoke-MgGraphRequest swaps the session's cloud
+            environment for one with no sign-in endpoint, and keeps the swap.
+            The SDK then rebuilds its HTTP client after the next
+            Set-MgRequestContext, and a session signed in as a user, or with a
+            certificate or secret, fails that request and every one after it
+            with "Invalid URI: The format of the URI could not be determined."
+            Seen in Microsoft.Graph.Authentication 2.41.0.
     #>
     [CmdletBinding()]
     [OutputType([psobject])]
@@ -453,6 +463,14 @@ function Invoke-GraphRequestWithRetry {
 
     $retryStatus = if ($Method -eq 'GET') { @(429, 500, 502, 503, 504) } else { @(429, 503) }
 
+    # Relative, so that the SDK leaves the session's environment alone; the
+    # description says why. Messages keep the URI as the caller gave it.
+    $graphHost = 'https://graph.microsoft.com/'
+    $requestUri = $Uri
+    if ($Uri.StartsWith($graphHost, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $requestUri = $Uri.Substring($graphHost.Length)
+    }
+
     # -WhatIf:$false and -Confirm:$false keep the calling script's -WhatIf or
     # -Confirm from reaching Set-MgRequestContext, which supports ShouldProcess.
     $sdkMaxRetry = (Get-MgRequestContext).MaxRetry
@@ -473,7 +491,7 @@ function Invoke-GraphRequestWithRetry {
 
             $request = @{
                 Method                  = $Method
-                Uri                     = $Uri
+                Uri                     = $requestUri
                 OutputType              = 'Json'
                 StatusCodeVariable      = 'statusCode'
                 ResponseHeadersVariable = 'responseHeaders'

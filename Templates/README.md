@@ -44,6 +44,16 @@ what the earlier per-script loops did. The helpers switch the SDK's retry off
 for each request and restore it afterwards, so their own loop is the only one
 and `-MaximumAttempt` means what it says.
 
+The helpers hand the SDK every `https://graph.microsoft.com` URI as a path
+relative to that host, and the SDK sends it to the same address. Given an
+absolute URI, `Invoke-MgGraphRequest` swaps the session's cloud environment for
+one with no sign-in endpoint, and keeps the swap. Changing the retry setting
+makes the SDK rebuild its HTTP client, and a session signed in as a user, or
+with a certificate or secret, then fails every request after the first with
+`Invalid URI: The format of the URI could not be determined.` The real-SDK
+tests below cannot show this: they sign in with an access token, which needs no
+sign-in endpoint. The stand-in tests check the path the SDK is given instead.
+
 The region is copied rather than loaded from a shared file so that each script
 still runs when copied out on its own. The copies cannot drift apart:
 `Script-Template.Tests.ps1` fails while any copy differs from the template's,

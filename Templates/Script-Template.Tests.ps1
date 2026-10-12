@@ -429,6 +429,37 @@ Describe 'Graph helpers' {
             $script:Requests[0].SkipHttpErrorCheck | Should -BeTrue
         }
 
+        # Given an absolute URI, the real SDK swaps the session's environment
+        # for one with no sign-in endpoint, and a session signed in as a user
+        # then fails every request after the first. The real-SDK tests below
+        # sign in with an access token, which needs no sign-in endpoint, so
+        # only the path handed to the SDK shows the fix.
+        It 'hands the SDK a relative path for <Case>, so the session keeps its sign-in endpoint' -ForEach @(
+            @{ Case = 'a v1.0 URI'; Given = 'https://graph.microsoft.com/v1.0/deviceManagement/managedDevices?$top=5'; Sent = 'v1.0/deviceManagement/managedDevices?$top=5' }
+            @{ Case = 'a beta URI'; Given = 'https://graph.microsoft.com/beta/deviceManagement/windowsFeatureUpdateProfiles'; Sent = 'beta/deviceManagement/windowsFeatureUpdateProfiles' }
+            @{ Case = 'a relative URI'; Given = 'v1.0/groups'; Sent = 'v1.0/groups' }
+        ) {
+            $script:Responses.Enqueue((Get-StandInResponse -Status 200))
+
+            $null = Invoke-GraphRequestWithRetry -Uri $Given
+
+            $script:Requests[0].Uri | Should -BeExactly $Sent
+        }
+
+        It 'leaves a URI on another host as the caller gave it' {
+            $script:Responses.Enqueue((Get-StandInResponse -Status 200))
+
+            $null = Invoke-GraphRequestWithRetry -Uri 'http://localhost:8080/v1.0/groups'
+
+            $script:Requests[0].Uri | Should -BeExactly 'http://localhost:8080/v1.0/groups'
+        }
+
+        It 'names the URI as the caller gave it when the request fails' {
+            $script:Responses.Enqueue((Get-StandInResponse -Status 404 -Content '{"error":{"code":"NotFound","message":"gone"}}'))
+
+            { Invoke-GraphRequestWithRetry -Uri $script:Uri } | Should -Throw "HTTP 404 from GET $script:Uri after 1 attempt(s): NotFound: gone"
+        }
+
         It 'keeps timestamps as the text Graph sent where PowerShell allows it' {
             $keepsText = $PSVersionTable.PSEdition -eq 'Desktop' -or
                 (Get-Command -Name ConvertFrom-Json).Parameters.ContainsKey('DateKind')
@@ -681,7 +712,7 @@ Describe 'Graph helpers' {
             $items = Get-GraphCollection -Uri $script:Uri
 
             @($items | ForEach-Object { $_.id }) | Should -Be @('a', 'b', 'c')
-            $script:Requests[1].Uri | Should -Be ($script:Uri + '?$skiptoken=2')
+            $script:Requests[1].Uri | Should -Be 'v1.0/deviceManagement/managedDevices?$skiptoken=2'
         }
 
         It 'returns a List, not $null, for an empty collection' {
