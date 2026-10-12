@@ -263,8 +263,9 @@ version.
 per-user one. Notes say what else to know: a per-user entry, an uninstaller
 inside a user profile, whose path Intune cannot build because it does not
 expand variables in an uninstall command, an entry hidden by
-`SystemComponent`, and an NSIS uninstaller, which returns before it has
-finished unless given `_?=<install folder>`.
+`SystemComponent`, an NSIS uninstaller, which returns before it has
+finished unless given `_?=<install folder>`, and an uninstaller that could not
+be read.
 
 ### Snapshots
 
@@ -278,14 +279,16 @@ user profile folders included: keep it local.
 
 | Code | Meaning |
 | --- | --- |
-| `0` | Success, including a comparison that found no change, which also writes a warning |
+| `0` | Success, including a comparison that found no change and an uninstaller that could not be read, each of which also writes a warning |
 | `1` | The registry or the snapshot could not be read, or the snapshot could not be written |
 
 ### Limits
 
 - Only the signed-in user's per-user entries are read, not other users' hives.
 - NSIS is recognised from its uninstaller's file; one larger than 8 MB is not
-  read.
+  read. One that cannot be read, such as an app execution alias under
+  `%LOCALAPPDATA%\Microsoft\WindowsApps`, leaves its entry `Unknown`, with a
+  warning and a note giving the reason; every other entry is still listed.
 - The commands are each framework's defaults, which a vendor can change.
   Test them on a virtual machine.
 
@@ -298,4 +301,7 @@ Invoke-Pester -Path .\Standalone\Packaging\Get-UninstallEntry.Tests.ps1 -Output 
 The registry reader is tested against a key under
 `HKEY_CURRENT_USER\Software\EndpointEngineeringTests`, removed afterwards, and
 never against the real Uninstall keys. The end-to-end runs only read those,
-and write their snapshots to TestDrive.
+and write their snapshots to TestDrive. One runs a copy of the script in which
+stand-ins point it at the test key instead, and make one uninstaller throw what reading
+an app execution alias throws: the other entries still list, and the script
+exits `0`.

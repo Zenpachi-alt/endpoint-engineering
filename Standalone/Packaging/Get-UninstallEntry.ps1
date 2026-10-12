@@ -41,7 +41,9 @@
     The installer that wrote an entry is recognised from the entry itself: an
     MSI from WindowsInstaller, Inno Setup from the _is1 key name, WiX Burn
     from BundleUpgradeCode, Squirrel from Update.exe --uninstall. NSIS is
-    recognised by reading its uninstaller, which carries the NSIS manifest.
+    recognised by reading its uninstaller, which carries the NSIS manifest. An
+    uninstaller that cannot be read, such as an app execution alias, leaves its
+    entry Unknown, with a warning and a note giving the reason.
 
     Entries without a DisplayName are skipped, as Windows skips them.
 
@@ -79,8 +81,8 @@
 
 .NOTES
     Author        : Tomasz Pietryka
-    Version       : 1.0.0
-    Last updated  : 2026-10-05
+    Version       : 1.0.1
+    Last updated  : 2026-10-12
 
     PowerShell    : 5.1 or later. Packaging is often done on a clean virtual
                     machine that has only Windows PowerShell, and nothing here
@@ -95,7 +97,8 @@
 
     Platform      : Windows only.
 
-    Exit codes    : 0 success, including a comparison that found no change.
+    Exit codes    : 0 success, including a comparison that found no change, and
+                      an uninstaller that could not be read.
                     1 the registry or the snapshot could not be read, or the
                       snapshot could not be written.
 
@@ -386,7 +389,19 @@ function ConvertTo-UninstallReport {
     )
 
     $notes = [System.Collections.Generic.List[string]]::new()
-    $installer = Get-InstallerType -Entry $Entry
+    try {
+        $installer = Get-InstallerType -Entry $Entry
+    }
+    catch [System.IO.IOException], [System.UnauthorizedAccessException] {
+        # Recognising NSIS reads the uninstaller, and not every file opens: an app execution alias
+        # under WindowsApps is a reparse point File.ReadAllBytes cannot read. That leaves this one
+        # entry unrecognised, not the whole listing unread.
+        $installer = 'Unknown'
+        # Trimmed: under Windows PowerShell the message ends with a line break.
+        $reason = $_.Exception.GetBaseException().Message.Trim()
+        Write-Warning ('Cannot read the uninstaller of {0}, so its installer was not recognised: {1}' -f $Entry.DisplayName, $reason)
+        $notes.Add(('The uninstaller could not be read, so its installer was not recognised: {0}' -f $reason))
+    }
     $productCode = $null
     if ($installer -eq 'MSI' -and $Entry.KeyName -match '^\{[0-9A-Fa-f-]{36}\}$') { $productCode = $Entry.KeyName.ToUpperInvariant() }
     $removed = $Change -eq 'Removed'

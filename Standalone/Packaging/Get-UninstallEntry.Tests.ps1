@@ -17,7 +17,9 @@
     afterwards.
 
     The script itself is also run end to end. Those runs only read the real
-    Uninstall keys, and write snapshots to TestDrive.
+    Uninstall keys, and write snapshots to TestDrive. One runs a copy of the
+    script in which stand-ins point it at the test key instead, and make one
+    uninstaller throw what reading an app execution alias throws.
 
     Product codes and other identifier-shaped values are generated at run
     time, so this file passes Tools/Test-SensitiveContent.ps1 like any other.
@@ -58,8 +60,8 @@ Describe 'Get-UninstallEntry' -Skip:([Environment]::OSVersion.Platform -ne 'Win3
 
         function Write-TestEntry {
             # An Uninstall entry under the test key: ints become DWORDs, arrays REG_MULTI_SZ.
-            param ([string]$KeyName, [hashtable]$Value = @{})
-            $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey(('{0}\Uninstall\{1}' -f $script:TestRoot, $KeyName))
+            param ([string]$KeyName, [hashtable]$Value = @{}, [string]$Folder = 'Uninstall')
+            $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey(('{0}\{1}\{2}' -f $script:TestRoot, $Folder, $KeyName))
             try {
                 foreach ($valueName in $Value.Keys) {
                     $data = $Value[$valueName]
@@ -92,9 +94,30 @@ Describe 'Get-UninstallEntry' -Skip:([Environment]::OSVersion.Platform -ne 'Win3
             [pscustomobject]$entry
         }
 
+        function ConvertTo-StandInCopy {
+            # A copy of the script in which each function named in -Function is replaced by the
+            # definition given for it. The main block and every other function run as written.
+            param ([hashtable]$Function)
+            $tree = [System.Management.Automation.Language.Parser]::ParseFile($script:ScriptPath, [ref]$null, [ref]$null)
+            $text = $tree.Extent.Text
+            $replaced = @($tree.EndBlock.Statements | Where-Object {
+                    $_ -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Function.ContainsKey($_.Name)
+                })
+            if ($replaced.Count -ne $Function.Count) { throw 'Every stand-in must replace a function the script defines.' }
+            # From the end backwards, so every offset still points where it did.
+            foreach ($original in @($replaced | Sort-Object -Property { $_.Extent.StartOffset } -Descending)) {
+                $text = $text.Substring(0, $original.Extent.StartOffset) + $Function[$original.Name] + $text.Substring($original.Extent.EndOffset)
+            }
+            $folder = Join-Path -Path $TestDrive -ChildPath ([guid]::NewGuid().ToString('n'))
+            $null = New-Item -ItemType Directory -Path $folder
+            $copy = Join-Path -Path $folder -ChildPath 'Get-UninstallEntry.ps1'
+            [IO.File]::WriteAllText($copy, $text, [System.Text.UTF8Encoding]::new($false))
+            $copy
+        }
+
         function Invoke-UnderTest {
-            param ([hashtable]$Parameters)
-            $all = & $script:ScriptPath @Parameters 3>&1 2>&1
+            param ([hashtable]$Parameters, [string]$Path = $script:ScriptPath)
+            $all = & $Path @Parameters 3>&1 2>&1
             $exitCode = $LASTEXITCODE
             [pscustomobject]@{
                 Output   = @($all | Where-Object {
@@ -335,6 +358,51 @@ Describe 'Get-UninstallEntry' -Skip:([Environment]::OSVersion.Platform -ne 'Win3
             $result.Errors | Should -BeNullOrEmpty
             $result.Output.Count | Should -BeGreaterThan 0
             @($result.Output | Where-Object { -not $_.DisplayName -or -not $_.IntuneInstallBehavior }).Count | Should -Be 0
+        }
+
+        It 'lists every entry, and exits 0, when reading one uninstaller throws <Type>' -ForEach @(
+            # What File.ReadAllBytes throws under Windows PowerShell for an app execution alias in
+            # WindowsApps, a reparse point it cannot open, line break included; and for a file the
+            # user may not read.
+            @{ Type = 'System.IO.IOException'; Message = "The file cannot be accessed by the system.`r`n" }
+            @{ Type = 'System.UnauthorizedAccessException'; Message = 'Access to the path is denied.' }
+        ) {
+            $alias = 'C:\Users\Example\AppData\Local\Microsoft\WindowsApps\testapp.exe'
+            Write-TestEntry -Folder 'Unreadable' -KeyName 'Alias App' -Value @{ DisplayName = 'Alias App'; UninstallString = ('"{0}" uninstall' -f $alias) }
+            Write-TestEntry -Folder 'Unreadable' -KeyName 'Other App' -Value @{ DisplayName = 'Other App'; UninstallString = '"C:\Program Files\Other App\remove.exe"' }
+
+            # Stand-ins: the test key in place of the real Uninstall keys, and an uninstaller
+            # check that fails for the alias the way the real read does.
+            $source = @'
+function Get-UninstallSource {
+    param ([bool]$Is64BitWindows)
+    @{ Hive = 'CurrentUser'; View = 'Default'; SubKey = '<SubKey>'; Scope = 'Machine'; RegistryView = '64-bit'; RegistryPath = '<RegistryPath>' }
+}
+'@
+            $nsis = @'
+function Test-NsisUninstaller {
+    param ([string]$Path)
+    if ($Path -ne '<Alias>') { return $false }
+    # Thrown from a .NET method, as File.ReadAllBytes throws it, so PowerShell wraps it the same way.
+    $exception = New-Object -TypeName '<Type>' -ArgumentList '<Message>'
+    [System.Runtime.ExceptionServices.ExceptionDispatchInfo]::Capture($exception).Throw()
+}
+'@
+            $copy = ConvertTo-StandInCopy @{
+                'Get-UninstallSource'  = $source.Replace('<SubKey>', "$script:TestRoot\Unreadable").Replace('<RegistryPath>', $script:MachinePath)
+                'Test-NsisUninstaller' = $nsis.Replace('<Alias>', $alias).Replace('<Type>', $Type).Replace('<Message>', $Message)
+            }
+
+            $result = Invoke-UnderTest @{} -Path $copy
+
+            $result.ExitCode | Should -Be 0
+            $result.Errors | Should -BeNullOrEmpty
+            @($result.Output.DisplayName) | Should -Be @('Alias App', 'Other App')
+            $result.Output[0].Installer | Should -Be 'Unknown'
+            $result.Output[0].Notes | Where-Object { $_ -like '*could not be read*' } |
+                Should -BeExactly ('The uninstaller could not be read, so its installer was not recognised: {0}' -f $Message.Trim())
+            ($result.Output[1].Notes -join ' ') | Should -Not -Match 'could not be read'
+            $result.Warnings | Should -BeExactly ('Cannot read the uninstaller of Alias App, so its installer was not recognised: {0}' -f $Message.Trim())
         }
 
         It 'returns nothing, and exits 0, when no entry matches -Name' {
