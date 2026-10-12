@@ -1,7 +1,7 @@
 #!/bin/sh
 # SPDX-FileCopyrightText: 2026 Tomasz Pietryka
 # SPDX-License-Identifier: MIT
-# Source: https://github.com/Zenpachi-alt/endpoint-engineering
+# Source: https://github.com/zenpachi-alt/endpoint-engineering
 #
 # Blocks a commit that contains tenant identifiers or credential material.
 # Installed by running Tools/Install-GitHook.ps1, which points core.hooksPath
