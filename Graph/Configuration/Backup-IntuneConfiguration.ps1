@@ -28,7 +28,9 @@
       Remediations          deviceManagement/deviceHealthScripts
                             beta only
       PlatformScripts       deviceManagement/deviceManagementScripts (Windows)
-                            deviceManagement/deviceShellScripts (macOS)
+                            deviceManagement/deviceShellScripts (macOS),
+                            with assignments read through $expand: the
+                            documented assignments path answers HTTP 400
                             beta only
       ConfigurationProfiles deviceManagement/configurationPolicies
                             beta only; settings catalog, endpoint security,
@@ -133,8 +135,8 @@
 
 .NOTES
     Author        : Tomasz Pietryka
-    Version       : 1.4.0
-    Last updated  : 2026-10-11
+    Version       : 1.4.1
+    Last updated  : 2026-10-17
 
     PowerShell    : 7.2 or later. The script uses Path.GetRelativePath and
                     -Encoding utf8BOM, which Windows PowerShell 5.1 lacks, and
@@ -289,7 +291,7 @@ finally {
 
 $script:GraphBeta      = 'https://graph.microsoft.com/beta'
 $script:GraphV1        = 'https://graph.microsoft.com/v1.0'
-$script:ScriptVersion  = '1.4.0'
+$script:ScriptVersion  = '1.4.1'
 $script:LogFile        = $null
 $script:BackupRoot     = $null
 $script:Index          = [System.Collections.Generic.List[object]]::new()
@@ -1292,9 +1294,12 @@ function Backup-PlatformScript {
     $label = 'PlatformScripts'
     $root = Initialize-BackupFolder -Path (Join-Path $script:BackupRoot $label)
 
+    # The Graph documentation lists deviceShellScripts/{id}/assignments, but the
+    # service answers it with HTTP 400, "No OData route exists". It does return
+    # the same assignments expanded on the script itself.
     $sources = @(
-        @{ Segment = 'deviceManagementScripts'; Folder = 'Windows'; Extension = '.ps1'; Optional = $false }
-        @{ Segment = 'deviceShellScripts'; Folder = 'macOS'; Extension = '.sh'; Optional = $true }
+        @{ Segment = 'deviceManagementScripts'; Folder = 'Windows'; Extension = '.ps1'; Optional = $false; ExpandAssignments = $false }
+        @{ Segment = 'deviceShellScripts'; Folder = 'macOS'; Extension = '.sh'; Optional = $true; ExpandAssignments = $true }
     )
 
     foreach ($source in $sources) {
@@ -1328,7 +1333,22 @@ function Backup-PlatformScript {
                     $Context.GraphType = 'deviceShellScript (run as: {0}, frequency: {1}, retries: {2})' -f $object.runAsAccount, $object.executionFrequency, $object.retryCount
                 }
 
-                $Context.Assignments = Get-GraphCollection -Uri "$objectUri/assignments" @GraphRequestOptions
+                if ($source.ExpandAssignments) {
+                    # A second read rather than expanding the first, so the script
+                    # itself is on disk even if this one fails.
+                    $expandUri = '{0}?$expand=assignments' -f $objectUri
+                    $expanded = Get-GraphObject -Uri $expandUri
+                    # A response without the list would otherwise pass for a script
+                    # assigned to nothing.
+                    if ($null -eq $expanded -or $null -eq $expanded.PSObject.Properties['assignments']) {
+                        throw "GET $expandUri returned no 'assignments' list."
+                    }
+                    $Context.Assignments = [System.Collections.Generic.List[object]]::new()
+                    foreach ($assignment in $expanded.assignments) { $Context.Assignments.Add($assignment) }
+                }
+                else {
+                    $Context.Assignments = Get-GraphCollection -Uri "$objectUri/assignments" @GraphRequestOptions
+                }
                 Save-JsonFile -InputObject $Context.Assignments -Path (Join-Path $Folder 'assignments.json')
 
                 if ($IncludeDeviceRunStates) {

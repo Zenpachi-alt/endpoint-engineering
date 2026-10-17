@@ -7,9 +7,9 @@
 
 <#
 .SYNOPSIS
-    Pester tests for Backup-IntuneConfiguration.ps1: the WindowsUpdates
-    category, the timestamp helpers, the Autopatch note in the index, and the
-    scopes the script signs in with.
+    Pester tests for Backup-IntuneConfiguration.ps1: the WindowsUpdates and
+    PlatformScripts categories, the timestamp helpers, the Autopatch note in
+    the index, and the scopes the script signs in with.
 
 .DESCRIPTION
     The script's functions are loaded from its syntax tree, so its main block,
@@ -23,7 +23,9 @@
     That proves the script's own logic: which files it writes, what the index
     says, and how a failure stays contained. It cannot prove that Graph still
     answers as documented, because the stand-in tenant is built from that
-    documentation; only a run against a real tenant shows that. The other four
+    documentation; only a run against a real tenant shows that. Where a real
+    tenant has answered otherwise, the stand-in answers as the tenant did: it
+    refuses the assignments path of a macOS shell script. The other three
     categories are not covered yet.
 
     The script is also started as a file, in a child process, for the exit
@@ -237,6 +239,36 @@ BeforeAll {
             )
         }
 
+        # A Windows and a macOS platform script, assigned like the policies above.
+        $script:Tenant['deviceManagementScripts'] = @(
+            [pscustomobject]@{
+                '@odata.type'         = '#microsoft.graph.deviceManagementScript'
+                id                    = [guid]::NewGuid().ToString()
+                displayName           = 'Set the time zone'
+                fileName              = 'Set-TimeZone.ps1'
+                scriptContent         = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("Set-TimeZone -Id 'UTC'`n"))
+                runAsAccount          = 'system'
+                runAs32Bit            = $false
+                enforceSignatureCheck = $false
+                lastModifiedDateTime  = $modified
+            }
+        )
+        $script:Tenant['deviceShellScripts'] = @(
+            [pscustomobject]@{
+                '@odata.type'        = '#microsoft.graph.deviceShellScript'
+                id                   = [guid]::NewGuid().ToString()
+                displayName          = 'Enable the firewall'
+                fileName             = 'enable-firewall.sh'
+                scriptContent        = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("#!/bin/sh`necho on`n"))
+                runAsAccount         = 'system'
+                executionFrequency   = 'PT0S'
+                retryCount           = 3
+                lastModifiedDateTime = $modified
+            }
+        )
+        # Set to make the service leave out an expanded assignments list.
+        $script:ExpandIgnored = $false
+
         $script:DriverInventories = @{
             $manualProfile    = @(
                 Get-StandInDriver -DriverName 'Contoso Audio' -DriverClass 'Audio' -ApprovalStatus 'approved' -DeployDateTime '2026-09-03T00:00:00Z'
@@ -264,6 +296,17 @@ BeforeAll {
             return [pscustomobject]@{ id = $Matches[1]; displayName = $script:Groups[$Matches[1]] }
         }
 
+        # An object with its assignments expanded, the one way the service
+        # returns those of a macOS shell script.
+        $expand = '?$expand=assignments'
+        if ($Uri.EndsWith($expand)) {
+            $expanded = (Get-GraphObject -Uri $Uri.Substring(0, $Uri.Length - $expand.Length)).PSObject.Copy()
+            if (-not $script:ExpandIgnored) {
+                $expanded | Add-Member -NotePropertyName 'assignments' -NotePropertyValue @($script:Assignments)
+            }
+            return $expanded
+        }
+
         foreach ($segment in $script:Tenant.Keys) {
             foreach ($object in $script:Tenant[$segment]) {
                 if ($Uri -eq "$script:GraphBeta/deviceManagement/$segment/$($object.id)") { return $object }
@@ -281,6 +324,10 @@ BeforeAll {
 
         $source = $null
         switch -Regex ($Uri.Replace("$script:GraphBeta/deviceManagement/", '')) {
+            # Documented, but refused by the service, as a real tenant showed.
+            '^deviceShellScripts/[^/]+/assignments$' {
+                throw "HTTP 400 from GET $Uri after 1 attempt(s): No OData route exists"
+            }
             '^(\w+)$' { $source = $script:Tenant[$Matches[1]] }
             '^\w+/[^/]+/assignments$' { $source = $script:Assignments }
             '^\w+/([^/]+)/driverInventories$' { $source = $script:DriverInventories[$Matches[1]] }
@@ -292,20 +339,26 @@ BeforeAll {
         return , $items
     }
 
-    function Invoke-WindowsUpdateBackup {
-        # Runs the category as the script would, filtered when -NameFilter or
-        # -IdFilter is given, and separates what it warns and reports.
-        param ([string[]]$NameFilter, [string[]]$IdFilter)
+    function Invoke-CategoryBackup {
+        # Runs one category as the script would, filtered when -NameFilter or
+        # -IdFilter is given, and separates what it warns and reports. Not
+        # -Category, which would be the script's own parameter of that name.
+        param (
+            [Parameter(Mandatory)][ValidateSet('WindowsUpdates', 'PlatformScripts')][string]$CategoryName,
+            [string[]]$NameFilter,
+            [string[]]$IdFilter
+        )
 
         # The script's functions read -Name and -Id from the scope that calls them.
         Set-Variable -Name 'Name' -Value $NameFilter
         Set-Variable -Name 'Id' -Value $IdFilter
         Set-Variable -Name 'ErrorActionPreference' -Value 'Stop'
 
-        $all = @(Backup-WindowsUpdate 3>&1 2>&1)
+        $backup = @{ WindowsUpdates = 'Backup-WindowsUpdate'; PlatformScripts = 'Backup-PlatformScript' }[$CategoryName]
+        $all = @(& $backup 3>&1 2>&1)
         [pscustomobject]@{
             Rows     = @($script:Index)
-            Root     = Join-Path -Path $script:BackupRoot -ChildPath 'WindowsUpdates'
+            Root     = Join-Path -Path $script:BackupRoot -ChildPath $CategoryName
             Warnings = @($all | Where-Object { $_ -is [System.Management.Automation.WarningRecord] } | ForEach-Object Message)
             Errors   = @($all | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] } | ForEach-Object { "$_" })
             Log      = Get-Content -LiteralPath $script:LogFile -Raw
@@ -388,7 +441,7 @@ Describe 'The WindowsUpdates category' {
         BeforeAll {
             Initialize-StandInTenant
             Initialize-BackupState
-            $script:Run = Invoke-WindowsUpdateBackup
+            $script:Run = Invoke-CategoryBackup -CategoryName WindowsUpdates
         }
 
         It 'backs up all seven policies without a failure, a warning or an error' {
@@ -538,7 +591,7 @@ Describe 'The WindowsUpdates category' {
         It 'counts and reports a policy type that cannot be listed, and backs up the others' {
             $script:FailingUris.Add("$script:GraphBeta/deviceManagement/windowsQualityUpdatePolicies")
 
-            $run = Invoke-WindowsUpdateBackup
+            $run = Invoke-CategoryBackup -CategoryName WindowsUpdates
 
             $script:CategoryErrors | Should -Be 1
             $script:FailedCount | Should -Be 0
@@ -553,7 +606,7 @@ Describe 'The WindowsUpdates category' {
             $manualProfile = ($script:Tenant.windowsDriverUpdateProfiles | Where-Object displayName -EQ 'Drivers - Manual').id
             $script:FailingUris.Add("$script:GraphBeta/deviceManagement/windowsDriverUpdateProfiles/$manualProfile/driverInventories")
 
-            $run = Invoke-WindowsUpdateBackup
+            $run = Invoke-CategoryBackup -CategoryName WindowsUpdates
             $failed = Get-IndexRow -Run $run -DisplayName 'Drivers - Manual'
 
             $script:FailedCount | Should -Be 1
@@ -567,7 +620,7 @@ Describe 'The WindowsUpdates category' {
         }
 
         It 'backs up only what -Name selects, and creates no folder for a type with nothing selected' {
-            $run = Invoke-WindowsUpdateBackup -NameFilter 'Drivers - *'
+            $run = Invoke-CategoryBackup -CategoryName WindowsUpdates -NameFilter 'Drivers - *'
 
             @($run.Rows.DisplayName | Sort-Object) | Should -Be @('Drivers - Automatic', 'Drivers - Manual')
             Join-Path -Path $run.Root -ChildPath 'FeatureUpdates' | Should -Not -Exist
@@ -577,10 +630,92 @@ Describe 'The WindowsUpdates category' {
         It 'backs up only what -Id selects' {
             $expediteProfile = $script:Tenant.windowsQualityUpdateProfiles[0].id
 
-            $run = Invoke-WindowsUpdateBackup -IdFilter $expediteProfile
+            $run = Invoke-CategoryBackup -CategoryName WindowsUpdates -IdFilter $expediteProfile
 
             $run.Rows | Should -HaveCount 1
             $run.Rows[0].DisplayName | Should -Be 'Expedite September'
+        }
+    }
+}
+
+Describe 'The PlatformScripts category' {
+
+    Context 'A tenant with a Windows and a macOS script' {
+
+        BeforeAll {
+            Initialize-StandInTenant
+            Initialize-BackupState
+            $script:Run = Invoke-CategoryBackup -CategoryName PlatformScripts
+        }
+
+        It 'backs up both scripts without a failure, a warning or an error' {
+            $script:Run.Rows | Should -HaveCount 2
+            $script:Run.Rows.Status | Should -Be @('OK', 'OK')
+            $script:FailedCount | Should -Be 0
+            $script:Run.Warnings | Should -BeNullOrEmpty
+            $script:Run.Errors | Should -BeNullOrEmpty
+        }
+
+        It 'saves the <Platform> script, its definition and its assignments under PlatformScripts/<Platform>' -ForEach @(
+            @{ Platform = 'Windows'; DisplayName = 'Set the time zone'; FileName = 'Set-TimeZone.ps1' }
+            @{ Platform = 'macOS'; DisplayName = 'Enable the firewall'; FileName = 'enable-firewall.sh' }
+        ) {
+            $row = Get-IndexRow -Run $script:Run -DisplayName $DisplayName
+
+            (($row.Folder -split '[\\/]')[0..1] -join '/') | Should -Be "PlatformScripts/$Platform"
+            Get-BackupFile -Row $row -FileName 'script.json' | Should -Exist
+            Get-BackupFile -Row $row -FileName $FileName | Should -Exist
+            Get-BackupFile -Row $row -FileName 'assignments.json' | Should -Exist
+        }
+
+        It 'reads the assignments of a macOS script expanded on it, not from the path the service refuses' {
+            $row = Get-IndexRow -Run $script:Run -DisplayName 'Enable the firewall'
+            $saved = @(Get-Content -LiteralPath (Get-BackupFile -Row $row -FileName 'assignments.json') -Raw | ConvertFrom-Json)
+
+            $saved | Should -HaveCount 2
+            $row.AssignmentCount | Should -Be 2
+            $row.Assignments | Should -BeExactly 'Include: Autopatch Test ring; Exclude: Kiosks'
+            $script:CollectionReads.Uri | Should -Not -Match '/deviceShellScripts/[^/]+/assignments'
+        }
+
+        It 'reads the assignments of a Windows script from its assignments path' {
+            $windowsScript = $script:Tenant.deviceManagementScripts[0].id
+
+            $script:CollectionReads.Uri | Should -Contain "$script:GraphBeta/deviceManagement/deviceManagementScripts/$windowsScript/assignments"
+        }
+    }
+
+    Context 'Failures' {
+
+        BeforeEach {
+            Initialize-StandInTenant
+            Initialize-BackupState
+        }
+
+        It 'fails a macOS script whose assignments cannot be read, and keeps the script it already saved' {
+            $macScript = $script:Tenant.deviceShellScripts[0].id
+            $script:FailingUris.Add("$script:GraphBeta/deviceManagement/deviceShellScripts/$macScript" + '?$expand=assignments')
+
+            $run = Invoke-CategoryBackup -CategoryName PlatformScripts
+            $failed = Get-IndexRow -Run $run -DisplayName 'Enable the firewall'
+
+            $script:FailedCount | Should -Be 1
+            $failed.Status | Should -Be 'Failed'
+            $failed.Notes | Should -BeLike 'HTTP 500 from GET *expand=assignments'
+            Get-BackupFile -Row $failed -FileName 'enable-firewall.sh' | Should -Exist
+            (Get-IndexRow -Run $run -DisplayName 'Set the time zone').Status | Should -Be 'OK'
+        }
+
+        It 'fails a macOS script when the service leaves out its assignments, rather than record none' {
+            $script:ExpandIgnored = $true
+
+            $run = Invoke-CategoryBackup -CategoryName PlatformScripts
+            $failed = Get-IndexRow -Run $run -DisplayName 'Enable the firewall'
+
+            $failed.Status | Should -Be 'Failed'
+            $failed.Notes | Should -BeLike "*returned no 'assignments' list."
+            $failed.AssignmentCount | Should -Be ''
+            $run.Errors | Should -HaveCount 1
         }
     }
 }
