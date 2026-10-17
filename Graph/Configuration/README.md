@@ -7,7 +7,7 @@ policies, as objects in the tenant rather than as things running on a device.
 | Script | Purpose |
 | --- | --- |
 | `Backup-IntuneConfiguration.ps1` | Point-in-time export of five configuration categories, with assignments, embedded scripts and an index. |
-| `Backup-IntuneConfiguration.Tests.ps1` | Pester tests for the Windows updates category and the index helpers. CI runs them on every push. |
+| `Backup-IntuneConfiguration.Tests.ps1` | Pester tests for the Windows updates and platform scripts categories and the index helpers. CI runs them on every push. |
 
 ## Backup-IntuneConfiguration.ps1
 
@@ -248,17 +248,23 @@ below a file, and asserts the fatal message and exit code `1`. It does need
 the Graph module, and is skipped where that is not installed. Exit code `2`
 takes a tenant to produce, and is not tested.
 
-They cover the Windows updates category, the timestamp helpers and the Autopatch
-note: which files are written, what the index says, how a failure on one policy
-or one policy type stays contained, and that every read honours `-MaxRetries`.
-They also cover signing in: the read scopes a run asks for, `-UseDeviceCode`,
-and which broader scopes an existing session may hold instead.
-The other four categories are not covered yet.
+They cover the Windows updates and platform scripts categories, the timestamp
+helpers and the Autopatch note: which files are written, what the index says,
+how a failure on one policy or one policy type stays contained, and that every
+read honours `-MaxRetries`. They also cover signing in: the read scopes a run
+asks for, `-UseDeviceCode`, and which broader scopes an existing session may
+hold instead. The other three categories are not covered yet.
 
 What they cannot show is that Graph still answers as documented. The stand-in
 tenant is built from Microsoft's documentation, so a beta property that changes
 or a page that is wrong passes here and fails against a real tenant. Run the
 script against a test tenant after changing what it reads.
+
+That has happened once. The documentation lists an `assignments` path for macOS
+shell scripts, and a real tenant answered it with HTTP 400, `No OData route
+exists`. The script now reads those assignments expanded on the script, with
+`$expand=assignments`, and the stand-in tenant refuses the documented path as
+the real one did.
 
 ### Reference
 
